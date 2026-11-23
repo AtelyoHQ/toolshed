@@ -251,3 +251,110 @@ describe('processImage', () => {
     expect([result.width, result.height]).toEqual([10, 20]);
   });
 });
+
+describe('the metadata-only fast path knows when it must not be taken', () => {
+  it('decodes and rotates a photo that carries an orientation tag', () => {
+    // The whole point of the fast path is to avoid a generation of quality
+    // loss. But dropping the orientation tag while leaving the pixels alone
+    // turns every portrait phone photo on its side — and a portrait phone
+    // photo is exactly what this feature gets used on.
+    const codecs = fakeCodecs(picture(8, 4));
+    return processImage(jpegBytes({ orientation: 6 }), BASE, codecs).then((result) => {
+      expect(codecs.decode).toHaveBeenCalled();
+      expect(codecs.encode).toHaveBeenCalled();
+      expect([result.width, result.height]).toEqual([4, 8]);
+    });
+  });
+
+  it('still takes it for an upright photo', async () => {
+    const codecs = fakeCodecs();
+    const result = await processImage(jpegBytes({ orientation: 1 }), BASE, codecs);
+    expect(codecs.decode).not.toHaveBeenCalled();
+    expect(result.note).toMatch(/without re-encoding/i);
+  });
+
+  it('re-encodes a multi-picture file instead of claiming the location is gone', async () => {
+    // Samsung and Apple append whole extra JPEGs after the primary one, each
+    // with its own GPS. A marker walk over the primary image never sees them.
+    const one = jpegBytes({ orientation: 1 });
+    const two = new Uint8Array(one.length * 2);
+    two.set(one, 0);
+    two.set(one, one.length);
+
+    const codecs = fakeCodecs();
+    await processImage(two, BASE, codecs);
+    expect(codecs.decode).toHaveBeenCalled();
+  });
+
+  it('reports the real dimensions rather than zeros', async () => {
+    // Read from the header without decoding; a row showing 0x0 is useless.
+    const withSof = (() => {
+      const parts: number[] = [0xff, 0xd8];
+      const payload = [0x08, 0x00, 0x40, 0x00, 0x80, 0x03];
+      parts.push(0xff, 0xc0, 0x00, payload.length + 2, ...payload);
+      const exif = [
+        0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00,
+        0x00,
+      ];
+      parts.push(0xff, 0xe1, 0x00, exif.length + 2, ...exif);
+      parts.push(0xff, 0xda, 0x00, 0x02, 0x11, 0x22, 0xff, 0xd9);
+      return new Uint8Array(parts);
+    })();
+
+    const result = await processImage(withSof, BASE, fakeCodecs());
+    expect([result.width, result.height]).toEqual([128, 64]);
+  });
+});
+
+describe('keeping metadata', () => {
+  it('changes nothing at all when that is what was asked for', async () => {
+    // Re-encoding would cost a generation of quality and drop the metadata
+    // anyway, since the encoders do not carry it — the opposite of the ask.
+    const codecs = fakeCodecs();
+    const original = jpegBytes({ orientation: 1 });
+    const result = await processImage(original, { ...BASE, stripMetadata: false }, codecs);
+
+    expect(codecs.decode).not.toHaveBeenCalled();
+    expect(codecs.encode).not.toHaveBeenCalled();
+    expect(result.bytes).toBe(original);
+    expect(result.unchanged).toBe(true);
+  });
+
+  it('does not block a real edit', async () => {
+    const codecs = fakeCodecs();
+    await processImage(
+      jpegBytes({ orientation: 1 }),
+      { ...BASE, stripMetadata: false, rotate: 90 },
+      codecs,
+    );
+    expect(codecs.encode).toHaveBeenCalled();
+  });
+});
+
+describe('reporting a downscale', () => {
+  it('reports the dimensions it actually encoded, and says it shrank the image', async () => {
+    // Resolution is the most visible thing this engine can take away, and it
+    // was taken to meet a budget the person set. Reporting the original size
+    // would be telling them it did not happen.
+    const codecs = fakeCodecs(picture(400, 300), 1);
+    const result = await processImage(
+      pngBytes(),
+      { ...BASE, format: 'jpeg', targetBytes: 3000 },
+      codecs,
+    );
+
+    expect(result.width).toBeLessThan(400);
+    expect(result.height).toBeLessThan(300);
+    expect(result.note).toMatch(/resized to/i);
+  });
+
+  it('says nothing about resizing when it did not resize', async () => {
+    const codecs = fakeCodecs(picture(100, 100), 1);
+    const result = await processImage(
+      pngBytes(),
+      { ...BASE, format: 'jpeg', targetBytes: 8000 },
+      codecs,
+    );
+    expect(result.note ?? '').not.toMatch(/resized/i);
+  });
+});

@@ -7,7 +7,13 @@ import {
   type EncodableFormat,
   type ImageFormat,
 } from './format';
-import { orientationTransform, readOrientation, stripMetadata } from './metadata';
+import {
+  hasTrailingImages,
+  orientationTransform,
+  readDimensions,
+  readOrientation,
+  stripMetadata,
+} from './metadata';
 import {
   crop,
   flip,
@@ -81,16 +87,15 @@ export class UnreadableImageError extends Error {
   }
 }
 
-/** True when the request is "take the metadata out and change nothing else". */
-function isMetadataOnly(settings: ImageSettings, source: ImageFormat): boolean {
+/** True when nothing about the pixels was asked to change. */
+function isPixelPreserving(settings: ImageSettings, source: ImageFormat): boolean {
   return (
     (settings.format === 'keep' || settings.format === source) &&
     settings.targetBytes === undefined &&
     settings.resize === undefined &&
     settings.crop === undefined &&
     !settings.rotate &&
-    !settings.flip &&
-    settings.stripMetadata !== false
+    !settings.flip
   );
 }
 
@@ -104,26 +109,54 @@ export async function processImage(
   if (!source) throw new UnreadableImageError();
   onProgress?.(0.05);
 
+  const orientation = readOrientation(bytes);
+  const pixelPreserving = isPixelPreserving(settings, source);
+
+  // "Keep my metadata and change nothing else" is a no-op. Re-encoding would
+  // cost a generation of quality and lose the metadata anyway, since the
+  // encoders do not carry it — the opposite of what was asked for.
+  if (pixelPreserving && settings.stripMetadata === false) {
+    onProgress?.(1);
+    const size = readDimensions(bytes);
+    return {
+      bytes,
+      format: source,
+      mime: mimeFor(source),
+      extension: extensionFor(source),
+      width: size?.width ?? 0,
+      height: size?.height ?? 0,
+      unchanged: true,
+      note: 'Nothing to do: metadata was kept and no change to the image was requested.',
+    };
+  }
+
   // Stripping metadata alone needs no decode and no re-encode, so the pixels
   // come out bit-for-bit identical. Decoding here would be a generation of
   // quality loss in exchange for nothing.
-  if (isMetadataOnly(settings, source)) {
+  //
+  // Two cases must not take it. A photo with an orientation tag needs its
+  // pixels rotated before the tag goes, or it comes out sideways — which is
+  // most phone photos, and exactly the files this feature exists for. And a
+  // multi-picture file hides whole extra images, with their own GPS, after
+  // the primary one; a marker walk never sees them, so the honest answer
+  // there is to re-encode and drop them.
+  if (pixelPreserving && orientation === 1 && !hasTrailingImages(bytes)) {
     const stripped = stripMetadata(bytes);
     if (stripped !== bytes) {
       onProgress?.(1);
+      const size = readDimensions(bytes);
       return {
         bytes: stripped,
         format: source,
         mime: mimeFor(source),
         extension: extensionFor(source),
-        width: 0,
-        height: 0,
+        width: size?.width ?? 0,
+        height: size?.height ?? 0,
         note: 'Metadata removed without re-encoding the image.',
       };
     }
   }
 
-  const orientation = readOrientation(bytes);
   let image = await codecs.decode(bytes, source);
   onProgress?.(0.35);
 
@@ -155,6 +188,10 @@ export async function processImage(
 
   let output: Uint8Array;
   let quality = settings.quality;
+  // The dimensions actually encoded, which a target-size search may shrink.
+  let encodedWidth = image.width;
+  let encodedHeight = image.height;
+  let scaleNote: string | undefined;
 
   if (settings.targetBytes !== undefined) {
     const result = await encodeToTargetSize(
@@ -167,6 +204,14 @@ export async function processImage(
     );
     output = result.bytes;
     quality = result.quality;
+    if (result.scale < 1) {
+      // Resolution is the most visible thing this engine can take away, and
+      // it was taken to meet a budget the person set. Reporting the original
+      // dimensions here would be telling them it did not happen.
+      encodedWidth = Math.max(1, Math.round(image.width * result.scale));
+      encodedHeight = Math.max(1, Math.round(image.height * result.scale));
+      scaleNote = `Resized to ${encodedWidth}x${encodedHeight} to fit the target size.`;
+    }
     if (!result.withinBudget) {
       onProgress?.(1);
       return {
@@ -174,10 +219,12 @@ export async function processImage(
         format: target,
         mime: mimeFor(target),
         extension: extensionFor(target),
-        width: image.width,
-        height: image.height,
+        width: encodedWidth,
+        height: encodedHeight,
         quality,
-        note: 'Could not reach the target size; this is the smallest it would go.',
+        note: `Could not reach the target size; this is the smallest it would go.${
+          scaleNote ? ` ${scaleNote}` : ''
+        }`,
       };
     }
   } else {
@@ -211,8 +258,9 @@ export async function processImage(
     format: target,
     mime: mimeFor(target),
     extension: extensionFor(target),
-    width: image.width,
-    height: image.height,
+    width: encodedWidth,
+    height: encodedHeight,
     quality,
+    ...(scaleNote ? { note: scaleNote } : {}),
   };
 }

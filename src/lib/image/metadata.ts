@@ -85,6 +85,11 @@ function* jpegSegments(bytes: Uint8Array): Generator<JpegSegment> {
     }
     const length = ((bytes[i + 2] ?? 0) << 8) | (bytes[i + 3] ?? 0);
     if (length < 2) return;
+    // A truncated file — an interrupted download, a bad copy — declares a
+    // segment longer than what is actually there. Yielding it makes the
+    // stripper compute a negative span and throw a nonsense RangeError, so
+    // the walk simply stops and the remaining bytes are left alone.
+    if (i + 2 + length > bytes.length) return;
     yield { marker, start: i, end: i + 2 + length };
     i += 2 + length;
   }
@@ -158,6 +163,41 @@ const STRIPPABLE_JPEG = new Set([
  * The ICC colour profile (APP2) is kept: dropping it shifts the colours of
  * wide-gamut photos, which is a visible change to the image, not metadata.
  */
+const ICC_MARKER = [0x49, 0x43, 0x43, 0x5f, 0x50, 0x52, 0x4f, 0x46, 0x49, 0x4c, 0x45, 0x00];
+
+/** True for an APP2 that really is a colour profile rather than, say, MPF. */
+function isIccSegment(bytes: Uint8Array, segment: JpegSegment): boolean {
+  if (segment.marker !== 0xe2) return false;
+  return ICC_MARKER.every((byte, index) => bytes[segment.start + 4 + index] === byte);
+}
+
+/**
+ * Whether anything follows the primary image's end-of-image marker.
+ *
+ * Samsung and Apple cameras append whole extra JPEGs after it and index them
+ * from an APP2 Multi-Picture segment. Those extra images carry their own EXIF
+ * and GPS, and a marker walk over the primary image never sees them — so for
+ * such a file an in-place strip cannot honestly claim the location is gone,
+ * and the caller re-encodes instead.
+ */
+export function hasTrailingImages(bytes: Uint8Array): boolean {
+  if (!isJpeg(bytes)) return false;
+
+  // Past the scan the data is entropy-coded, so look for the last EOI rather
+  // than trying to walk it.
+  for (let i = bytes.length - 2; i >= 2; i--) {
+    if (bytes[i] === 0xff && bytes[i + 1] === EOI) {
+      // Anything after the final EOI is appended data. Find the FIRST EOI to
+      // know whether there is more than one image in the file.
+      for (let j = 2; j + 1 < bytes.length; j++) {
+        if (bytes[j] === 0xff && bytes[j + 1] === EOI) return j < i;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
 export function stripJpegMetadata(bytes: Uint8Array): Uint8Array {
   if (!isJpeg(bytes)) return bytes;
 
@@ -166,7 +206,12 @@ export function stripJpegMetadata(bytes: Uint8Array): Uint8Array {
   let removed = 0;
 
   for (const segment of jpegSegments(bytes)) {
-    if (!STRIPPABLE_JPEG.has(segment.marker)) continue;
+    // APP2 goes only if it is not the colour profile: dropping that shifts
+    // the colours of a wide-gamut photo, which is a change to the image.
+    const strippable =
+      STRIPPABLE_JPEG.has(segment.marker) ||
+      (segment.marker === 0xe2 && !isIccSegment(bytes, segment));
+    if (!strippable) continue;
     if (segment.start > cursor) keep.push([cursor, segment.start]);
     cursor = segment.end;
     removed += segment.end - segment.start;
@@ -229,4 +274,37 @@ export function stripMetadata(bytes: Uint8Array): Uint8Array {
   if (isJpeg(bytes)) return stripJpegMetadata(bytes);
   if (isPng(bytes)) return stripPngMetadata(bytes);
   return bytes;
+}
+
+/**
+ * Reads the pixel dimensions from the header, without decoding anything.
+ *
+ * The metadata-only path never decodes, and a result that reports 0x0 would
+ * have the interface display nothing where the size should be.
+ */
+export function readDimensions(bytes: Uint8Array): { width: number; height: number } | null {
+  if (isPng(bytes) && bytes.length >= 24) {
+    return {
+      width: readUint32(bytes, 16, false),
+      height: readUint32(bytes, 20, false),
+    };
+  }
+
+  if (!isJpeg(bytes)) return null;
+  for (const segment of jpegSegments(bytes)) {
+    // Any start-of-frame: baseline, progressive, and the arithmetic and
+    // lossless variants, but not DHT/JPG/DAC which share the 0xC0 block.
+    const isFrame =
+      segment.marker >= 0xc0 &&
+      segment.marker <= 0xcf &&
+      segment.marker !== 0xc4 &&
+      segment.marker !== 0xc8 &&
+      segment.marker !== 0xcc;
+    if (!isFrame) continue;
+    return {
+      height: readUint16(bytes, segment.start + 5, false),
+      width: readUint16(bytes, segment.start + 7, false),
+    };
+  }
+  return null;
 }

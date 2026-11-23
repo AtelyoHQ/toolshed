@@ -175,14 +175,31 @@ test('strips EXIF without re-encoding the pixels', async ({ page }) => {
     const before = withExif.byteLength;
     const jpegOnly = jpeg.byteLength;
 
+    const digest = async (data: Uint8Array) => {
+      const hash = await crypto.subtle.digest('SHA-256', data.slice() as BufferSource);
+      return Array.from(new Uint8Array(hash))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+    };
+    // Hashed before the call, because the buffer is transferred away.
+    const originalDigest = await digest(jpeg);
+
     const { processImageInWorker } = (await import(/* @vite-ignore */ enginePath)) as Engine;
     const out = await processImageInWorker(withExif, { format: 'keep', quality: 80 });
 
-    return { before, after: out.bytes.byteLength, jpegOnly, note: out.note ?? '' };
+    return {
+      before,
+      after: out.bytes.byteLength,
+      jpegOnly,
+      note: out.note ?? '',
+      originalDigest,
+      resultDigest: await digest(out.bytes),
+    };
   }, ENGINE);
 
-  // The metadata is gone and the compressed scan data is untouched, so the
-  // result is exactly the original minus the segment.
+  // Byte for byte, not merely the same length: a stripper that removed the
+  // segment and also corrupted a byte of the scan would pass a length check.
+  expect(result.resultDigest).toBe(result.originalDigest);
   expect(result.after).toBe(result.jpegOnly);
   expect(result.after).toBeLessThan(result.before);
   expect(result.note).toMatch(/without re-encoding/i);

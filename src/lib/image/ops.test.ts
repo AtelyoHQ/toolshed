@@ -177,3 +177,25 @@ describe('flatten', () => {
     expect(getPixel(out, 0, 0)[0]).toBeLessThan(135);
   });
 });
+
+describe('resolveSize with unusable numbers', () => {
+  it('falls back to the source size rather than producing NaN', () => {
+    // An emptied number field in a form is exactly how a UI produces NaN,
+    // and a NaN size reaches the raster allocator as an unreadable error.
+    const image = createRaster(640, 480);
+    for (const target of [{ width: Number.NaN }, { height: Number.NaN }, { scale: Number.NaN }]) {
+      expect(resolveSize(image, target), JSON.stringify(target)).toEqual({
+        width: 640,
+        height: 480,
+      });
+    }
+  });
+
+  it('does not let an infinite value through either', () => {
+    const image = createRaster(640, 480);
+    expect(resolveSize(image, { longestEdge: Number.POSITIVE_INFINITY })).toEqual({
+      width: 640,
+      height: 480,
+    });
+  });
+});

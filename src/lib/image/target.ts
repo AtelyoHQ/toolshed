@@ -20,7 +20,11 @@ export interface TargetOptions {
   targetBytes: number;
   minQuality?: number;
   maxQuality?: number;
-  /** Quality steps to try before giving up. */
+  /**
+   * Hard ceiling on encode calls, across the quality search and any
+   * downscaling. Each encode of a large photo costs real time, so this is
+   * what bounds how long a target-size request can take.
+   */
   maxIterations?: number;
   /**
    * Shrink the image when even the lowest quality will not fit. On by default:
@@ -104,12 +108,14 @@ export async function encodeToTargetSize(
 
     // Try the ceiling first: a photo that already fits at high quality should
     // cost one encode, not eight.
+    if (attempts >= config.maxIterations) return;
     attempts += 1;
     const atHigh = await encode(candidate, high);
     record(atHigh, high, scale);
     config.onProgress?.(attempts / config.maxIterations);
     if (atHigh.byteLength <= config.targetBytes) return;
 
+    if (attempts >= config.maxIterations) return;
     attempts += 1;
     const atLow = await encode(candidate, low);
     record(atLow, low, scale);

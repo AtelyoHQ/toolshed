@@ -19,6 +19,14 @@ function imagePool(): WorkerPool<ImageWorkerApi> {
   return pool;
 }
 
+/**
+ * Runs one image through the engine in a worker.
+ *
+ * **The `bytes` you pass are transferred, not copied.** That avoids a second
+ * full-size copy of what can be a 200 MB buffer, but it detaches the array:
+ * after this call its `byteLength` is 0 and reading it gives nothing. Take
+ * any measurements first, or pass a copy.
+ */
 export function processImageInWorker(
   bytes: Uint8Array,
   settings: ImageSettings,

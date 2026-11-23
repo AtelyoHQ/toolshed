@@ -125,3 +125,16 @@ describe('encodeToTargetSize', () => {
     expect(result.bytes.byteLength).toBeLessThanOrEqual(2500);
   });
 });
+
+describe('the iteration ceiling is a real ceiling', () => {
+  it('is not exceeded by the two bracketing encodes', async () => {
+    // The high and low encodes used to run unconditionally, so a budget of 1
+    // cost 2 encodes and a budget of 3 cost 4. A caller sizing this against
+    // a time budget would be over it.
+    for (const limit of [1, 2, 3, 5]) {
+      const encode = vi.fn(modelEncoder());
+      await encodeToTargetSize(image, encode, { targetBytes: 2500, maxIterations: limit });
+      expect(encode.mock.calls.length, `limit ${limit}`).toBeLessThanOrEqual(limit);
+    }
+  });
+});

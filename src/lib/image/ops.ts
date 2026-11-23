@@ -142,10 +142,16 @@ export function resolveSize(
     return { width: image.width, height: image.height };
   }
 
+  // An emptied number field in a form gives NaN, and a NaN size propagates
+  // into a raster allocation that throws something unreadable. Falling back
+  // to the source size is the only sensible reading of "no number".
+  if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    return { width: image.width, height: image.height };
+  }
   if (!allowUpscale && (width > image.width || height > image.height)) {
     return { width: image.width, height: image.height };
   }
-  return { width: Math.max(1, width), height: Math.max(1, height) };
+  return { width: Math.max(1, Math.round(width)), height: Math.max(1, Math.round(height)) };
 }
 
 /** Lanczos-3 kernel; a: lobes. */

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  hasTrailingImages,
   isJpeg,
   isPng,
+  readDimensions,
   orientationTransform,
   readOrientation,
   stripJpegMetadata,
@@ -21,6 +23,14 @@ function jpeg(segments: Array<{ marker: number; payload: number[] }>): Uint8Arra
 }
 
 /** A little-endian EXIF APP1 payload carrying one orientation tag. */
+/** APP2 carrying a real ICC profile, which must survive stripping. */
+const ICC_PAYLOAD = [
+  0x49, 0x43, 0x43, 0x5f, 0x50, 0x52, 0x4f, 0x46, 0x49, 0x4c, 0x45, 0x00, 0x01, 0x01, 0x00, 0x00,
+];
+
+/** APP2 carrying a Multi-Picture index, which must not. */
+const MPF_PAYLOAD = [0x4d, 0x50, 0x46, 0x00, 0x49, 0x49, 0x2a, 0x00];
+
 function exifPayload(orientation: number): number[] {
   return [
     0x45,
@@ -130,7 +140,7 @@ describe('stripJpegMetadata', () => {
   it('keeps the JFIF header and the ICC profile', () => {
     const original = jpeg([
       { marker: 0xe0, payload: [0x4a, 0x46, 0x49, 0x46, 0x00] }, // APP0 JFIF
-      { marker: 0xe2, payload: [0x49, 0x43, 0x43] }, // APP2 ICC
+      { marker: 0xe2, payload: ICC_PAYLOAD }, // APP2 colour profile
       { marker: 0xe1, payload: exifPayload(3) },
     ]);
     const stripped = stripJpegMetadata(original);
@@ -200,5 +210,90 @@ describe('stripMetadata', () => {
     expect(readOrientation(stripMetadata(jpeg([{ marker: 0xe1, payload: exifPayload(8) }])))).toBe(
       1,
     );
+  });
+});
+
+describe('APP2 is not all colour profile', () => {
+  it('keeps a real ICC profile', () => {
+    const original = jpeg([
+      { marker: 0xe2, payload: ICC_PAYLOAD },
+      { marker: 0xe1, payload: exifPayload(1) },
+    ]);
+    const text = new TextDecoder('latin1').decode(stripJpegMetadata(original));
+    expect(text).toContain('ICC_PROFILE');
+  });
+
+  it('removes a Multi-Picture index, which is not a colour profile', () => {
+    // MPF points at extra JPEGs appended after the primary image, each with
+    // its own EXIF and GPS. Keeping the index because it happens to be APP2
+    // would keep a pointer to exactly the data this is meant to remove.
+    const original = jpeg([{ marker: 0xe2, payload: MPF_PAYLOAD }]);
+    const text = new TextDecoder('latin1').decode(stripJpegMetadata(original));
+    expect(text).not.toContain('MPF');
+  });
+});
+
+describe('truncated files', () => {
+  it('does not throw on a JPEG cut off inside its EXIF block', () => {
+    // The first 10-60 KB of a phone photo is its EXIF, so an interrupted
+    // download lands here. This used to throw RangeError: Invalid typed
+    // array length: -65520.
+    const truncated = new Uint8Array([
+      0xff, 0xd8, 0xff, 0xe1, 0xff, 0xfe, 0x45, 0x78, 0x69, 0x66, 0x00, 0x00, 0x01, 0x02, 0x03,
+      0x04,
+    ]);
+    expect(() => stripJpegMetadata(truncated)).not.toThrow();
+    expect(() => readOrientation(truncated)).not.toThrow();
+  });
+
+  it('never returns a shorter-than-possible or negative-length result', () => {
+    for (let cut = 2; cut < 40; cut++) {
+      const full = jpeg([{ marker: 0xe1, payload: exifPayload(6) }]);
+      const truncated = full.slice(0, cut);
+      expect(() => stripJpegMetadata(truncated), `cut at ${cut}`).not.toThrow();
+      expect(stripJpegMetadata(truncated).byteLength).toBeGreaterThanOrEqual(0);
+    }
+  });
+});
+
+describe('hasTrailingImages', () => {
+  it('is false for an ordinary single-image JPEG', () => {
+    expect(hasTrailingImages(jpeg([{ marker: 0xe1, payload: exifPayload(1) }]))).toBe(false);
+  });
+
+  it('is true when a second image is appended after the first', () => {
+    const one = jpeg([]);
+    const two = new Uint8Array(one.length * 2);
+    two.set(one, 0);
+    two.set(one, one.length);
+    expect(hasTrailingImages(two)).toBe(true);
+  });
+
+  it('is false for a non-JPEG', () => {
+    expect(hasTrailingImages(png([{ type: 'IEND', data: [] }]))).toBe(false);
+  });
+});
+
+describe('readDimensions', () => {
+  it('reads a PNG header', () => {
+    const header = [0, 0, 1, 0, 0, 0, 0, 200, 8, 6, 0, 0, 0];
+    expect(readDimensions(png([{ type: 'IHDR', data: header }]))).toEqual({
+      width: 256,
+      height: 200,
+    });
+  });
+
+  it('reads a JPEG start-of-frame', () => {
+    // length, precision, height, width, components
+    const sof = [0x08, 0x00, 0x90, 0x01, 0x40, 0x03];
+    expect(readDimensions(jpeg([{ marker: 0xc0, payload: sof }]))).toEqual({
+      width: 320,
+      height: 144,
+    });
+  });
+
+  it('is null when there is no header to read', () => {
+    expect(readDimensions(new Uint8Array([1, 2, 3]))).toBeNull();
+    expect(readDimensions(jpeg([]))).toBeNull();
   });
 });

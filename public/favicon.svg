@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Toolshed">
+  <rect width="512" height="512" rx="112" fill="#0b0f14"/>
+  <rect x="96" y="139" width="320" height="46" rx="23" fill="#e2e8f0"/>
+  <rect x="136" y="221" width="240" height="46" rx="23" fill="#7dd3fc"/>
+  <rect x="176" y="303" width="160" height="46" rx="23" fill="#38bdf8"/>
+</svg>

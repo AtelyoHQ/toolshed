@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Document-level half of the no-network guarantee. connect-src is 'self'
+      rather than 'none' because the WebAssembly codecs fetch their own .wasm
+      from this same origin; nothing may reach any other origin.
+
+      This meta tag covers THIS DOCUMENT ONLY. A dedicated worker takes its
+      policy from its own script's HTTP response, so the tag does not restrict
+      the workers where files are actually processed. public/_headers and
+      vercel.json send the same policy on every response, which does cover
+      them; see PRIVACY.md for what a host that cannot send headers leaves
+      exposed. frame-ancestors is omitted here because a meta CSP cannot set
+      it, and it is present in the header files.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <title>Toolshed — private PDF and image tools, no uploads</title>
+    <meta
+      name="description"
+      content="Compress, convert and edit PDFs and images entirely inside your browser tab. No uploads, no accounts, no size caps. Works offline. Open source."
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="theme-color" content="#0b0f14" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>Toolshed does all its work in your browser, so it needs JavaScript enabled.</noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

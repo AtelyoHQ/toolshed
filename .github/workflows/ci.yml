@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded pull-request runs are wasted minutes, but cancelling a run on
+  # main would throw away the baseline a later bisect needs.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm run test
+      - run: npm run build
+
+      # The icons are drawn by a script; this proves the committed PNGs still
+      # match it. Pixels are compared, not file bytes, so a different zlib
+      # build cannot fail the job on its own.
+      - name: Icons match their generator
+        run: npm run check:icons
+
+      # The whole point of the build is that dist/ works from any static host,
+      # including a subdirectory. Nothing else checks that.
+      - name: Bundle resolves when served from a subdirectory
+        run: npm run check:subpath
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

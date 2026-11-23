@@ -1,0 +1,60 @@
+@import 'tailwindcss';
+
+/* Theme is driven by a class on <html> so the toggle is instant and does not
+   depend on the OS setting. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-shell-950: #07090d;
+  --color-shell-900: #0b0f14;
+  --color-shell-850: #11161d;
+  --color-shell-800: #171d26;
+  --color-shell-700: #232b36;
+  --color-shell-600: #333d4b;
+  --color-shell-400: #7c8798;
+  --color-shell-200: #c7cedb;
+  --color-shell-100: #e6eaf1;
+
+  --color-accent-400: #7dd3fc;
+  --color-accent-500: #38bdf8;
+  --color-accent-600: #0ea5e9;
+
+  --color-good-500: #34d399;
+  --color-warn-500: #fbbf24;
+  --color-bad-500: #f87171;
+
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: light dark;
+  }
+
+  body {
+    @apply bg-white text-shell-800 antialiased;
+    font-family: var(--font-sans);
+  }
+
+  .dark body {
+    @apply bg-shell-900 text-shell-100;
+  }
+
+  /* Never remove focus rings: this app is meant to be fully keyboard-driven. */
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-accent-500;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}

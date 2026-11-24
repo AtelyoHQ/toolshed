@@ -4,5 +4,6 @@
  * engine — otherwise the checks pass by having nothing to look at.
  */
 import { processImageInWorker } from '../../src/lib/workers/imageClient';
+import { runPdfJobInWorker } from '../../src/lib/workers/pdfClient';
 
-(globalThis as Record<string, unknown>).__codecProbe = processImageInWorker;
+(globalThis as Record<string, unknown>).__codecProbe = { processImageInWorker, runPdfJobInWorker };

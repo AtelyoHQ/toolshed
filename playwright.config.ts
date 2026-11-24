@@ -18,8 +18,8 @@ const harnessUrl = `http://localhost:${HARNESS_PORT}`;
  *
  * The app suite runs against the built bundle, which is the artifact people
  * actually get. The engine suite imports modules by source path to drive the
- * codecs directly, which only the dev server can serve; what the build does
- * to those codecs is checked by scripts/check-bundle.mjs instead.
+ * codecs and pdf.js directly, which only the dev server can serve; what the
+ * build does to those is checked by scripts/check-bundle.mjs instead.
  *
  * The offline suite needs a built bundle that really loads WebAssembly, and
  * nothing in the app imports the engine yet, so it gets a built harness page
@@ -41,7 +41,7 @@ export default defineConfig({
     },
     {
       name: 'engine',
-      testMatch: /image-engine\.spec\.ts/,
+      testMatch: /-engine\.spec\.ts/,
       use: { ...devices['Desktop Chrome'], baseURL: devUrl },
       // WebAssembly codecs on a large image are genuinely slow the first time.
       timeout: 120_000,

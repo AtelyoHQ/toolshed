@@ -5,10 +5,13 @@ import { expect, test } from '@playwright/test';
  * with the network off — codec WebAssembly included.
  *
  * That is a property of the built service worker and of nothing else. The
- * precache carries the shell; the two CacheFirst rules in vite.config.ts carry
- * the script chunks and the `.wasm` a tool pulls in on demand. Dropping either
- * rule, or renaming the assets so a rule stops matching, leaves the shell
- * opening offline and every tool dead — which is the failure this catches.
+ * precache carries the shell; the CacheFirst rules in vite.config.ts carry
+ * the script chunks, the `.wasm` a tool pulls in on demand, and pdf.js's own
+ * fonts. Dropping either of the first two, or renaming the assets so a rule
+ * stops matching, leaves the shell opening offline and every tool dead —
+ * which is the failure this catches. The pdf.js rule is not covered here,
+ * because the harness below imports the image engine only: that one is
+ * checked against the built service worker by scripts/check-bundle.mjs.
  *
  * It runs against the harness page (scripts/probe/harness) rather than the
  * app, because nothing in the shipped bundle imports the image engine yet, so

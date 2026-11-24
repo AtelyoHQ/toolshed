@@ -15,6 +15,9 @@ const NO_NETWORK =
 export default tseslint.config(
   {
     // .claude holds agent worktrees, which are whole copies of this repo.
+    // dist-codec-probe is scripts/check-bundle.mjs's build: it cleans up after
+    // itself, but a failure part-way through leaves minified output in the
+    // tree and `npm run lint` then reports on Rollup's handiwork.
     ignores: [
       'dist',
       'dist-codec-probe',

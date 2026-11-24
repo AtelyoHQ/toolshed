@@ -26,6 +26,23 @@ written, for instance.
 `connect-src` is `'self'` and not `'none'` because the WebAssembly codecs fetch
 their own `.wasm` files from this same origin. No other origin is reachable.
 
+pdf.js is the one dependency that resolves part of itself at runtime: three
+WebAssembly modules, fourteen standard fonts and a hundred and sixty-eight
+character maps, each fetched from a base URL it is given and appends a file
+name to. Those bases default to nothing, so left alone pdf.js builds paths out
+of the literal string "null" and requests those. All of the files are bundled
+and pdf.js is handed the directory they are in, which is what keeps
+`connect-src 'self'` sufficient here rather than a matter of luck. Colour
+management is the one thing pdf.js checks before it fetches: without the wasm
+base it switches that off instead of requesting anything, and the CMYK colour
+profile is never requested at all.
+
+Those requests happen inside a worker pdf.js starts for itself, which the
+counter in the header does not wrap — that counter is the page's own tally.
+Your browser's Network tab does show them. What holds the line here is the
+response-header policy and an end-to-end test that fails if any request leaves
+this origin.
+
 The policy ships twice, and the difference matters:
 
 - As a `<meta>` tag in `index.html`. This covers the page, and it works on
@@ -66,7 +83,8 @@ determined.
 Do not take any of the above on trust:
 
 1. Open your browser's developer tools, go to the Network tab, and process a
-   file. There are no requests.
+   file. Every request is to this origin, and none of them carries your
+   file.
 2. Load the page, then disconnect from the network entirely and keep working.
 3. Read `index.html`, `public/_headers` and `e2e/app.spec.ts`. They are short.
 

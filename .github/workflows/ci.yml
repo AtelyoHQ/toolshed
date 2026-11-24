@@ -46,6 +46,12 @@ jobs:
       - name: Bundle contains what it should and nothing else
         run: npm run check:bundle
 
+      # Every other check goes through `vite preview` or reads files off
+      # disk, and neither sends public/_headers — so the policy production
+      # actually runs under was never exercised until this.
+      - name: The deploy headers hold in a browser
+        run: npx playwright install --with-deps chromium && npm run check:headers
+
   e2e:
     runs-on: ubuntu-latest
     steps:

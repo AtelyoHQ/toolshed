@@ -28,7 +28,8 @@
     "typecheck": "tsc -b --noEmit",
     "check:subpath": "node scripts/check-subpath.mjs",
     "check:icons": "node scripts/make-icons.mjs --check",
-    "check:bundle": "node scripts/check-bundle.mjs"
+    "check:bundle": "node scripts/check-bundle.mjs",
+    "check:headers": "node scripts/check-headers.mjs"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",

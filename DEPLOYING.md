@@ -83,3 +83,18 @@ Three checks, in increasing order of how much they prove:
    are no requests to anywhere but your own origin.
 3. Load the page, disconnect from the network entirely, and keep working. The
    app opens from cache; each tool works offline once you have used it once.
+
+## Checking the headers before you deploy
+
+`npm run check:headers` serves the build with `public/_headers` actually
+applied and loads it in a browser, which is the only check here that sees the
+Content-Security-Policy production runs under. Neither `vite preview` nor
+reading files off disk sends those headers, so a page can rely on something
+the policy forbids, pass every other gate, and arrive broken. That is not
+hypothetical: the privacy page shipped with an inline `<style>` block, which
+`style-src 'self'` drops, leaving a page that renders but will not wrap on a
+phone.
+
+If your host is GitHub Pages this check still tells you what a
+header-sending host would enforce, but nothing enforces it there — see the
+warning above.

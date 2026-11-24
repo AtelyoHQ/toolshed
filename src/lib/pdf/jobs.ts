@@ -99,7 +99,14 @@ export async function runPdfJob(
           label: part.label,
           pages: part.pages,
         })),
-        note: `Split into ${parts.length} documents.`,
+        // The first part's note as well: when the source was locked, every part
+        // is not, and that is the one thing a person sending them on needs told.
+        note: [
+          parts.find((part) => part.note)?.note,
+          `Split into ${parts.length} ${parts.length === 1 ? 'document' : 'documents'}.`,
+        ]
+          .filter(Boolean)
+          .join(' '),
       };
     }
 

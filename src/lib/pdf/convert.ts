@@ -1,4 +1,5 @@
-import { isJpeg, isPng, stripMetadata } from '../image/metadata';
+import { degrees, type PDFImage, type PDFPage } from '@cantoo/pdf-lib';
+import { isJpeg, isPng, readOrientation, stripMetadata } from '../image/metadata';
 import {
   createDocument,
   loadDocument,
@@ -95,6 +96,78 @@ export function placeImage(
   };
 }
 
+/**
+ * The clockwise quarter turn an EXIF orientation asks for.
+ *
+ * The mirrored orientations (2, 4, 5, 7) are refused rather than shown
+ * unmirrored: that is a different picture of the same photograph, which is
+ * the front camera of a phone and not something to get wrong in silence.
+ */
+function clockwiseTurn(orientation: number, label: string): 0 | 90 | 180 | 270 {
+  switch (orientation) {
+    case 1:
+      return 0;
+    case 3:
+      return 180;
+    case 6:
+      return 90;
+    case 8:
+      return 270;
+    default:
+      throw new PdfOperationError(
+        `${label} is stored mirrored (EXIF orientation ${orientation}), which a PDF page cannot show without changing the picture. Re-save it from a photo editor first.`,
+      );
+  }
+}
+
+/**
+ * Draws an image turned clockwise into the box it occupies on the page as
+ * displayed.
+ *
+ * `drawImage` turns about the point it is placed at and counts anticlockwise,
+ * so each turn moves that point to the corner that ends up at the box's origin
+ * and swaps the drawn width and height for a quarter turn.
+ */
+function drawTurned(
+  page: PDFPage,
+  image: PDFImage,
+  box: Placement,
+  turn: 0 | 90 | 180 | 270,
+): void {
+  switch (turn) {
+    case 0:
+      page.drawImage(image, box);
+      return;
+    case 90:
+      page.drawImage(image, {
+        x: box.x,
+        y: box.y + box.height,
+        width: box.height,
+        height: box.width,
+        rotate: degrees(-90),
+      });
+      return;
+    case 180:
+      page.drawImage(image, {
+        x: box.x + box.width,
+        y: box.y + box.height,
+        width: box.width,
+        height: box.height,
+        rotate: degrees(-180),
+      });
+      return;
+    case 270:
+      page.drawImage(image, {
+        x: box.x + box.width,
+        y: box.y,
+        width: box.height,
+        height: box.width,
+        rotate: degrees(90),
+      });
+      return;
+  }
+}
+
 export async function imagesToPdf(
   images: readonly ImageInput[],
   options: ImagesToPdfOptions,
@@ -115,6 +188,12 @@ export async function imagesToPdf(
     // which would make this the one tool here that publishes what the image
     // engine exists to remove. The segment walk does not touch the compressed
     // image data, so this costs no quality.
+    //
+    // The orientation tag goes with it, so it is read first. A phone held
+    // upright writes a landscape sensor image and a tag saying "turn this a
+    // quarter"; embedded without the turn, every portrait photograph is a
+    // sideways page.
+    const turn = clockwiseTurn(readOrientation(input.bytes), label);
     const bytes = stripMetadata(input.bytes);
     // pdf-lib can embed JPEG and PNG; everything else has to be converted by
     // the image engine first. Sniffed rather than trusted from the file name,
@@ -130,16 +209,22 @@ export async function imagesToPdf(
       );
     }
 
+    // As the reader will see it: a quarter turn swaps the sides.
+    const shown =
+      turn === 90 || turn === 270
+        ? { width: embedded.height, height: embedded.width }
+        : { width: embedded.width, height: embedded.height };
+
     if (options.sizing.mode === 'image') {
-      const width = pointsForPixels(embedded.width, dpi);
-      const height = pointsForPixels(embedded.height, dpi);
+      const width = pointsForPixels(shown.width, dpi);
+      const height = pointsForPixels(shown.height, dpi);
       const page = doc.addPage([width + margin * 2, height + margin * 2]);
-      page.drawImage(embedded, { x: margin, y: margin, width, height });
+      drawTurned(page, embedded, { x: margin, y: margin, width, height }, turn);
     } else {
       const { width, height, fit } = options.sizing;
       if (width <= 0 || height <= 0) throw new PdfOperationError('A page cannot have no size.');
       const page = doc.addPage([width, height]);
-      page.drawImage(embedded, placeImage(embedded, { width, height }, fit, margin));
+      drawTurned(page, embedded, placeImage(shown, { width, height }, fit, margin), turn);
     }
   }
 

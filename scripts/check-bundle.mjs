@@ -115,5 +115,78 @@ if (heavy.length > 0) {
   console.log(`ok   precache holds ${precached.length} shell file(s), no codecs or workers`);
 }
 
+// The update notice in src/components/UpdateNotice.tsx only ever fires because
+// the new worker claims this page: that is what makes a version take over an
+// open tab, and `controllerchange` the signal that it did. clientsClaim is
+// what registerType decides — vite-plugin-pwa emits it for 'autoUpdate' and
+// not for 'prompt' — so a switch there would leave the notice permanently
+// silent with every other test still green. This is the only line in the repo
+// that would notice. skipWaiting is deliberately not checked beside it: the
+// workbox template emits that call in both configurations, inside a message
+// handler when the option is off, so looking for it cannot fail.
+if (!sw.includes('clientsClaim()')) {
+  fail('sw.js does not call clientsClaim(), so a new version never takes over an open tab');
+}
+
+// 4. The manifest has to keep clearing the browser's bar for installability.
+//    Installing is what makes the app openable from a dock with no network,
+//    and the whole requirement is a list of manifest fields that a browser
+//    silently stops offering to install when one of them goes missing.
+const failuresBeforeManifest = failures;
+let manifest = {};
+try {
+  manifest = JSON.parse(await readFile(join(DIST, 'manifest.webmanifest'), 'utf8'));
+} catch (error) {
+  // A missing or unparseable manifest is the headline case this section is
+  // about, so it has to arrive as a FAIL line rather than a thrown stack.
+  fail(`could not read dist/manifest.webmanifest: ${error.message}`);
+}
+const icons = manifest.icons ?? [];
+// An omitted purpose means "any". A maskable-only icon does not count: a
+// browser will not install on the strength of one.
+const usable = icons.filter((icon) => (icon.purpose ?? 'any').split(/\s+/).includes('any'));
+const hasSquare = (size) =>
+  usable.some((icon) => (icon.sizes ?? '').split(/\s+/).includes(`${size}x${size}`));
+
+if (!manifest.name || !manifest.short_name) fail('the manifest is missing name or short_name');
+if (!manifest.start_url) fail('the manifest is missing start_url');
+if (!['standalone', 'fullscreen', 'minimal-ui'].includes(manifest.display)) {
+  fail(`display is "${manifest.display}", which no browser offers to install`);
+}
+if (!hasSquare(192) || !hasSquare(512)) {
+  fail('the manifest has no square any-purpose icon at both 192 and 512');
+}
+
+// Every declared icon has to exist, maskable ones included: Android draws the
+// installed app from the maskable icon, so a dangling src there is invisible
+// until someone installs it. A renamed or dropped PNG is the quiet way this
+// breaks, since the manifest still parses and check:icons compares the
+// committed PNGs against their generator rather than against these names.
+for (const icon of icons) {
+  try {
+    await stat(join(DIST, icon.src));
+  } catch {
+    fail(`the manifest names an icon that is not in the bundle: ${icon.src}`);
+  }
+}
+
+// start_url and scope have to stay relative for the same reason `base` is:
+// a leading slash pins the installed app to a domain root, and this bundle is
+// meant to run from a subdirectory. There is deliberately no `id` either —
+// it would do the same thing, permanently, since a manifest id cannot be
+// relative.
+for (const field of ['start_url', 'scope', 'id']) {
+  const value = manifest[field];
+  if (typeof value === 'string' && value.startsWith('/')) {
+    fail(`${field} is "${value}", which pins the installed app to a domain root`);
+  }
+}
+
+if (failures === failuresBeforeManifest) {
+  console.log(
+    `ok   manifest is installable: ${icons.length} icon(s) present, ${usable.length} any-purpose`,
+  );
+}
+
 console.log(failures === 0 ? '\nbundle looks right' : `\n${failures} failure(s)`);
 process.exit(failures === 0 ? 0 : 1);

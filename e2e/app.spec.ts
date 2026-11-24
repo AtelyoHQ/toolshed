@@ -61,6 +61,83 @@ test('keeps working with the network switched off', async ({ page, context }) =>
   }
 });
 
+test('offers to install, and takes no for an answer', async ({ page }) => {
+  // Chrome fires beforeinstallprompt only once its own engagement heuristics
+  // are satisfied, which no test can arrange. What is under test here is the
+  // application's reaction to the event, so the event is dispatched directly.
+  const browserOffersInstall = () =>
+    page.evaluate(async () => {
+      const event = new Event('beforeinstallprompt') as Event & { prompt?: () => Promise<void> };
+      event.prompt = () => Promise.resolve();
+      window.dispatchEvent(event);
+      // Waits for React to have rendered whatever the event caused, which the
+      // negative assertions below depend on: `toBeHidden` is satisfied by its
+      // first poll, and a bar that reappeared a few milliseconds later would
+      // pass an assertion made the instant after the dispatch.
+      await new Promise((settled) => requestAnimationFrame(() => requestAnimationFrame(settled)));
+    });
+
+  await page.goto('/');
+  const offer = page.getByRole('complementary', { name: 'Install Toolshed' });
+
+  // Nothing until the browser says the app is installable.
+  await expect(offer).toBeHidden();
+  await browserOffersInstall();
+  await expect(offer).toBeVisible();
+
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await expect(offer).toBeHidden();
+
+  // PRIVACY.md promises this one flag is everything the application keeps
+  // outside its own code cache. Nothing else in the repo would notice a
+  // second key appearing beside it.
+  expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([
+    'toolshed:install-dismissed',
+  ]);
+
+  // Not even if the browser offers again before the page has been reloaded.
+  await browserOffersInstall();
+  await expect(offer).toBeHidden();
+
+  // And still nothing on the next visit. An install bar that returns every
+  // time is exactly the behaviour this application exists in opposition to,
+  // and a dismissal that is not persisted looks identical until you reload.
+  await page.reload();
+  await browserOffersInstall();
+  await expect(offer).toBeHidden();
+});
+
+test('says when a new version has taken over, without reloading the page', async ({ page }) => {
+  await page.goto('/');
+  await page.evaluate(async () => {
+    await navigator.serviceWorker.ready;
+  });
+  // Reloading puts the page under the worker's control before the notice
+  // starts watching. That distinction is the whole of the logic: a first
+  // claim is not a new version and must stay quiet.
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+  await page.reload();
+  // Checked rather than assumed: an uncontrolled page would make the notice
+  // correctly stay silent, and the failure below would then read as "the
+  // notice never appeared".
+  await page.waitForFunction(() => navigator.serviceWorker.controller !== null);
+
+  const notice = page.getByRole('status');
+  await expect(notice).toBeHidden();
+
+  await page.evaluate(() => {
+    (window as unknown as { __sameDocument: boolean }).__sameDocument = true;
+    // A genuine update needs a second deployment. This is the event the
+    // application listens for, fired on the object it listens to.
+    navigator.serviceWorker.dispatchEvent(new Event('controllerchange'));
+  });
+
+  await expect(notice).toContainText('A new version');
+  // The reason the notice exists: an automatic reload would have thrown away
+  // whatever was queued or mid-encode.
+  expect(await page.evaluate(() => '__sameDocument' in window)).toBe(true);
+});
+
 test('blocks a request to another origin at runtime', async ({ page }) => {
   // Issue #2's acceptance criterion, and the only check that exercises the
   // guard against real browser globals rather than a stub. The unit tests

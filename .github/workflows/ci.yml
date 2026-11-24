@@ -41,7 +41,8 @@ jobs:
 
       # What got emitted and what got linked, which the source cannot show:
       # no threaded AVIF encoder, no third-party origins, no heavy chunks in
-      # the precache.
+      # the precache, a service worker that takes over an open tab, and a
+      # manifest a browser will still offer to install.
       - name: Bundle contains what it should and nothing else
         run: npm run check:bundle
 

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 dist-codec-probe/
+dist-offline-harness/
 dist-ssr/
 coverage/
 .DS_Store

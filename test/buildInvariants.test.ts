@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 import { resolveConfig } from 'vite';
 
 /**
- * Two build settings break the app without failing the build, so they are
- * asserted here against Vite's *resolved* configuration — not against the text
- * of vite.config.ts, which would pass just as happily if the setting were
- * commented out.
+ * Three settings fail silently: two break the app without failing the build,
+ * and the third shows up only as a flaky end-to-end run on a cold dependency
+ * cache. All three are asserted against Vite's *resolved* configuration — not
+ * against the text of vite.config.ts, which would pass just as happily if the
+ * setting were commented out.
  */
 describe('resolved build configuration', () => {
   const root = fileURLToPath(new URL('..', import.meta.url));
@@ -23,11 +24,19 @@ describe('resolved build configuration', () => {
       expect.arrayContaining([
         '@jsquash/avif',
         '@jsquash/jpeg',
+        '@jsquash/oxipng',
         '@jsquash/png',
         '@jsquash/resize',
         '@jsquash/webp',
       ]),
     );
+  }, 60_000);
+
+  it('pre-bundles libheif, which no scanned entry reaches', async () => {
+    // Discovered mid-session instead, it re-optimises and full-reloads the
+    // page, which fails whatever end-to-end test happened to be running.
+    const config = await resolveConfig({ root }, 'serve');
+    expect(config.optimizeDeps.include).toEqual(expect.arrayContaining(['libheif-js/wasm-bundle']));
   }, 60_000);
 });
 

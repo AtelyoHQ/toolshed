@@ -13,7 +13,17 @@ const NO_NETWORK =
   'If you genuinely need this, it belongs in src/lib/netguard.ts and needs a discussion first.';
 
 export default tseslint.config(
-  { ignores: ['dist', 'dev-dist', 'coverage', 'playwright-report', 'test-results'] },
+  {
+    ignores: [
+      'dist',
+      'dist-codec-probe',
+      'dist-offline-harness',
+      'dev-dist',
+      'coverage',
+      'playwright-report',
+      'test-results',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {

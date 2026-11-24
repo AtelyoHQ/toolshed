@@ -26,19 +26,25 @@ function imagePool(): WorkerPool<ImageWorkerApi> {
  * full-size copy of what can be a 200 MB buffer, but it detaches the array:
  * after this call its `byteLength` is 0 and reading it gives nothing. Take
  * any measurements first, or pass a copy.
+ *
+ * A `signal` aborted before a worker picks the job up drops it without
+ * spending anything on it. Once it has started there is nothing to stop.
  */
 export function processImageInWorker(
   bytes: Uint8Array,
   settings: ImageSettings,
   onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
 ): Promise<ImageJobResult> {
-  return imagePool().run((worker) =>
-    worker.process(
-      // Transferred, not copied: the caller must not use these bytes again.
-      Comlink.transfer(bytes, [bytes.buffer as ArrayBuffer]),
-      settings,
-      Comlink.proxy(onProgress ?? (() => {})),
-    ),
+  return imagePool().run(
+    (worker) =>
+      worker.process(
+        // Transferred, not copied: the caller must not use these bytes again.
+        Comlink.transfer(bytes, [bytes.buffer as ArrayBuffer]),
+        settings,
+        Comlink.proxy(onProgress ?? (() => {})),
+      ),
+    signal,
   );
 }
 

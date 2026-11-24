@@ -18,7 +18,7 @@ interface Props {
  */
 export function SettingsPanel({ tool, settings, onChange, idPrefix }: Props) {
   if (tool.fields.length === 0) {
-    return <p className="text-shell-400 text-xs">Nothing to configure.</p>;
+    return <p className="text-shell-400 text-xs">{tool.note ?? 'Nothing to configure.'}</p>;
   }
 
   return (
@@ -32,6 +32,7 @@ export function SettingsPanel({ tool, settings, onChange, idPrefix }: Props) {
           onChange={(value) => onChange({ [field.key]: value })}
         />
       ))}
+      {tool.note && <p className="text-shell-400 text-[11px] sm:col-span-2">{tool.note}</p>}
     </div>
   );
 }

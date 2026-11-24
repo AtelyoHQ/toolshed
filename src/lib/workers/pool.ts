@@ -28,6 +28,13 @@ export class PoolTerminatedError extends Error {
   }
 }
 
+export class TaskAbandonedError extends Error {
+  constructor() {
+    super('This job was cancelled before it started');
+    this.name = 'TaskAbandonedError';
+  }
+}
+
 export interface PoolOptions<Api = unknown> {
   /** Defaults to cores - 1, clamped to 1..4. */
   size?: number;
@@ -43,6 +50,7 @@ type Task<Api, R> = {
   run: (api: Comlink.Remote<Api>) => Promise<R>;
   resolve: (value: R) => void;
   reject: (reason: unknown) => void;
+  signal?: AbortSignal;
 };
 
 function defaultSize(): number {
@@ -216,11 +224,37 @@ export class WorkerPool<Api> {
   /**
    * Runs `fn` on a worker, waiting for one to free up if they are all busy.
    */
-  run<R>(fn: (api: Comlink.Remote<Api>) => Promise<R>): Promise<R> {
+  /**
+   * Runs `fn` on a worker, waiting for one to free up if they are all busy.
+   *
+   * A `signal` aborted before the task reaches a worker drops it outright:
+   * it never starts, and nothing is spent on it. Once it has started there
+   * is nothing to cancel — a WebAssembly call runs to completion — so the
+   * signal is ignored from then on and the caller discards the result. That
+   * distinction is the whole point: cancelling thirty of forty files used to
+   * cost the full batch, because every one of those thirty still took a
+   * worker and ran to the end before its answer was thrown away.
+   */
+  run<R>(fn: (api: Comlink.Remote<Api>) => Promise<R>, signal?: AbortSignal): Promise<R> {
     if (this.terminated) return Promise.reject(new PoolTerminatedError());
+    if (signal?.aborted) return Promise.reject(new TaskAbandonedError());
 
     return new Promise<R>((resolve, reject) => {
-      this.place({ run: fn, resolve, reject });
+      const task: Task<Api, R> = { run: fn, resolve, reject, signal };
+
+      if (signal) {
+        const abandon = () => {
+          // Only while it is still waiting. A dispatched task owns a worker
+          // and must be left to finish or the pool leaks the slot.
+          const queued = this.waiting.indexOf(task);
+          if (queued === -1) return;
+          this.waiting.splice(queued, 1);
+          reject(new TaskAbandonedError());
+        };
+        signal.addEventListener('abort', abandon, { once: true });
+      }
+
+      this.place(task);
     });
   }
 

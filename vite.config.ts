@@ -70,12 +70,50 @@ const PREBUNDLE = ['libheif-js/wasm-bundle'];
  * The text itself still lives in one place, PRIVACY.md at the repo root.
  */
 function emitPrivacyStatement(): Plugin {
+  // A separate stylesheet, not a <style> block. The shipped policy is
+  // `style-src 'self'`, so an inline block is dropped on any host that sends
+  // the real headers — the page stays readable but loses pre-wrap, and long
+  // lines scroll sideways on a phone. `vite preview` does not send the header
+  // files, which is exactly why that went unnoticed; scripts/check-headers.mjs
+  // now serves dist/ with them applied.
+  const stylesheet = `:root {
+  color-scheme: dark light;
+}
+
+body {
+  margin: 0 auto;
+  max-width: 46rem;
+  padding: 2.5rem 1.25rem 4rem;
+  background: #0b0f14;
+  color: #e6eaf1;
+  font: 15px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  body {
+    background: #fff;
+    color: #171d26;
+  }
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+a {
+  color: inherit;
+}
+`;
+
   return {
     name: 'toolshed:privacy-statement',
     async generateBundle() {
       const text = await readFile(new URL('./PRIVACY.md', import.meta.url), 'utf8');
       const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
+      this.emitFile({ type: 'asset', fileName: 'privacy.css', source: stylesheet });
       this.emitFile({
         type: 'asset',
         fileName: 'privacy.html',
@@ -86,22 +124,11 @@ function emitPrivacyStatement(): Plugin {
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Privacy — Toolshed</title>
     <meta name="color-scheme" content="dark light" />
-    <style>
-      :root { color-scheme: dark light; }
-      body {
-        margin: 0 auto;
-        max-width: 46rem;
-        padding: 2.5rem 1.25rem 4rem;
-        background: #0b0f14;
-        color: #e6eaf1;
-        font: 15px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      }
-      @media (prefers-color-scheme: light) {
-        body { background: #fff; color: #171d26; }
-      }
-      pre { white-space: pre-wrap; word-wrap: break-word; margin: 0; }
-      a { color: inherit; }
-    </style>
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; img-src 'self'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'"
+    />
+    <link rel="stylesheet" href="./privacy.css" />
   </head>
   <body>
     <pre>${escaped}</pre>
@@ -160,6 +187,7 @@ export default defineConfig({
         globPatterns: [
           'index.html',
           'privacy.html',
+          'privacy.css',
           'registerSW.js',
           'manifest.webmanifest',
           '**/entry-*.js',

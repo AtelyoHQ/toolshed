@@ -8,6 +8,7 @@ import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'vite';
+import { BUNDLED_LICENCES, licencePath } from './licences.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const DIST = join(ROOT, 'dist');
@@ -370,6 +371,27 @@ if (pdfjsStrategy !== 'CacheFirst') {
   );
 } else {
   console.log('ok   pdf.js runtime files are cached first, so they survive going offline');
+}
+
+// 4. Every bundled third party's licence text must ship. For libheif this
+//    is an obligation, not a courtesy: it is LGPL-3.0, and a build without
+//    its notice and without saying how to replace it does not meet the
+//    licence.
+for (const entry of BUNDLED_LICENCES) {
+  const path = join(DIST, licencePath(entry.package));
+  try {
+    const text = await readFile(path, 'utf8');
+    if (text.trim().length === 0) fail(`${entry.package}'s licence notice is empty`);
+  } catch {
+    fail(`${entry.package} ships no licence notice at ${licencePath(entry.package)}`);
+  }
+}
+try {
+  const index = await readFile(join(DIST, 'licences/index.txt'), 'utf8');
+  if (!index.includes('libheif-js')) fail('the licence index does not mention libheif');
+  else console.log(`ok   ${BUNDLED_LICENCES.length} licence notice(s) shipped`);
+} catch {
+  fail('there is no licences/index.txt');
 }
 
 console.log(failures === 0 ? '\nbundle looks right' : `\n${failures} failure(s)`);

@@ -80,6 +80,18 @@ If you redistribute a build of Toolshed, those terms travel with it. If you do
 not want the LGPL obligation at all, removing HEIC support removes libheif: it
 has exactly one call site, in `src/lib/image/codecs.ts`.
 
+## In a build
+
+Every licence above also ships inside the built site, so a deployment carries
+them whether or not this file travelled with it. `licences/index.txt` lists
+them with the obligations that come attached, and the full text of each sits
+beside it. pdf.js carries its own notices next to its runtime assets, under
+`assets/pdfjs-<version>/`.
+
+`npm run check:bundle` fails if any of them stops shipping. That is a real
+check rather than a tidy one: without libheif's notice, and without saying how
+to replace it, a distributed build does not meet the LGPL.
+
 ## Fonts
 
 None are bundled or fetched. Toolshed uses the fonts already on your system.

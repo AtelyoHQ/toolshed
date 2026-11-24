@@ -77,6 +77,8 @@ export interface Tool {
     action: string;
     /** What the single result is called. */
     outputName: string;
+    /** Fewest waiting rows worth offering the action for. */
+    min: number;
   };
   /**
    * The size of the result is not the point of this tool. Shown as a delta
@@ -300,7 +302,7 @@ export const PDF_TOOLS: Tool[] = [
     summary: 'Join several PDFs into one.',
     note: `Files are joined in the order listed; reorder them in the row. ${PDF_METADATA_NOTE}`,
     accepts: 'pdf',
-    combines: { action: 'Merge into one PDF', outputName: 'merged.pdf' },
+    combines: { action: 'Merge into one PDF', outputName: 'merged.pdf', min: 2 },
     hideDelta: true,
     defaults: {},
     fields: [],
@@ -563,7 +565,7 @@ export const PDF_TOOLS: Tool[] = [
     summary: 'One page per image.',
     note: 'JPEG and PNG only: convert anything else first. Camera location and device details are removed from every image.',
     accepts: 'image',
-    combines: { action: 'Combine into one PDF', outputName: 'images.pdf' },
+    combines: { action: 'Combine into one PDF', outputName: 'images.pdf', min: 1 },
     hideDelta: true,
     defaults: { sizing: 'image', margin: 0 },
     fields: [

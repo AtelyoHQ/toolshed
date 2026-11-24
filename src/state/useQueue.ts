@@ -170,6 +170,31 @@ export function useQueue() {
         dispatch({ type: 'cancel', id, at: Date.now() });
       },
       requeue: (id: string) => dispatch({ type: 'requeue', id }),
+      // Folds the waiting rows a combining tool can take into its one row.
+      // This is how a tool that was not chosen before the files were dropped
+      // still gets used: the grid is only on screen while the queue is empty.
+      gather: (toolId: string) => {
+        const tool = toolById(toolId);
+        if (!tool?.combines) return;
+        const { items, order } = latest.current;
+        const absorb = order.filter((id) => {
+          const item = items.find((candidate) => candidate.id === id);
+          return item?.status === 'queued' && !item.parts && item.source.kind === tool.accepts;
+        });
+        dispatch({
+          type: 'combine',
+          toolId,
+          kind: tool.accepts,
+          settings: tool.defaults,
+          sources: [],
+          absorb,
+          outputName: tool.combines.outputName,
+        });
+      },
+      moveSource: (id: string, sourceId: string, by: -1 | 1) =>
+        dispatch({ type: 'moveSource', id, sourceId, by }),
+      removeSource: (id: string, sourceId: string) =>
+        dispatch({ type: 'removeSource', id, sourceId }),
       // Sets the password a file opens with and runs it again. The requeue
       // is not redundant: typing the same password twice changes nothing, the
       // reducer ignores a settings patch that changes nothing, and a row left

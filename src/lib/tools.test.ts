@@ -151,6 +151,13 @@ describe('the PDF tools', () => {
     expect(combining.sort()).toEqual(['images-to-pdf', 'pdf-merge']);
   });
 
+  it('offers the gather button for one image but not for one PDF', () => {
+    // A single photograph turned into a PDF is a real request; a "merge" of
+    // one file is not.
+    expect(toolById('images-to-pdf')?.combines?.min).toBe(1);
+    expect(toolById('pdf-merge')?.combines?.min).toBe(2);
+  });
+
   it('offers a dropped PDF a tool that works on one file with no setup', () => {
     const tool = defaultToolFor('pdf');
     expect(tool.id).toBe('pdf-compress');

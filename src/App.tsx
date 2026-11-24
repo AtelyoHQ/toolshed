@@ -1,7 +1,7 @@
 import { useCallback, useState } from 'react';
 import { formatBytes, formatDelta } from './lib/bytes';
 import { saveBlob } from './lib/download';
-import { toolById, toolForDrop, type Tool } from './lib/tools';
+import { ALL_TOOLS, toolById, toolForDrop, type Tool } from './lib/tools';
 import { kindOf, type ToolSettings } from './lib/types';
 import { outputFiles } from './lib/outputs';
 import { zipFiles } from './lib/zip';
@@ -83,6 +83,17 @@ export default function App() {
     }
   }, [done]);
 
+  // What the waiting rows could be folded into. A tool that makes one file
+  // from many cannot be picked in the grid after the files are already here,
+  // since the grid is only on screen while the queue is empty.
+  const gatherable = ALL_TOOLS.flatMap((candidate) => {
+    if (!candidate.combines) return [];
+    const waiting = state.items.filter(
+      (item) => item.status === 'queued' && !item.parts && item.source.kind === candidate.accepts,
+    ).length;
+    return waiting >= candidate.combines.min ? [{ tool: candidate, waiting }] : [];
+  });
+
   const empty = state.items.length === 0;
 
   return (
@@ -137,6 +148,17 @@ export default function App() {
                   {zipping ? 'Packing…' : `Save all (${fileCount})`}
                 </button>
 
+                {gatherable.map(({ tool: combining, waiting }) => (
+                  <button
+                    key={combining.id}
+                    type="button"
+                    onClick={() => actions.gather(combining.id)}
+                    className="border-shell-200 hover:bg-shell-100 dark:border-shell-700 dark:hover:bg-shell-800 rounded border px-3 py-1.5 text-sm"
+                  >
+                    {combining.combines?.action} ({waiting})
+                  </button>
+                ))}
+
                 <button
                   type="button"
                   onClick={actions.clearFinished}
@@ -169,6 +191,8 @@ export default function App() {
                       onRemove={() => actions.remove(id)}
                       onPatch={(settings) => actions.patch(id, settings)}
                       onSetTool={(next) => actions.setTool(id, next)}
+                      onMoveSource={(sourceId, by) => actions.moveSource(id, sourceId, by)}
+                      onRemoveSource={(sourceId) => actions.removeSource(id, sourceId)}
                     />
                   );
                 })}

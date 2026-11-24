@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { formatBytes, formatDelta } from '../lib/bytes';
 import { outputFiles, saveOutput } from '../lib/outputs';
+import { openPasswordKey } from '../lib/pdfTools';
 import { ALL_TOOLS, toolById } from '../lib/tools';
 import { withExtension, type QueueItem, type ToolSettings } from '../lib/types';
 import { outputBytes } from '../state/queue';
@@ -15,6 +16,8 @@ interface Props {
   onRemove: () => void;
   onPatch: (settings: ToolSettings) => void;
   onSetTool: (toolId: string) => void;
+  onMoveSource: (sourceId: string, by: -1 | 1) => void;
+  onRemoveSource: (sourceId: string) => void;
 }
 
 const STATUS_LABEL: Record<QueueItem['status'], string> = {
@@ -33,6 +36,8 @@ export function QueueRow({
   onRemove,
   onPatch,
   onSetTool,
+  onMoveSource,
+  onRemoveSource,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -55,6 +60,7 @@ export function QueueRow({
         >
           <span className="block truncate text-sm font-medium">{item.source.name}</span>
           <span className="text-shell-400 font-mono text-xs">
+            {item.parts && `${item.parts.length} ${item.parts.length === 1 ? 'file' : 'files'}, `}
             {formatBytes(item.source.size)}
             {output && (
               <>
@@ -135,14 +141,25 @@ export function QueueRow({
             <select
               value={item.toolId}
               onChange={(event) => onSetTool(event.target.value)}
-              className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 mt-1 w-full rounded border px-2 py-1 text-xs"
+              // A row that owns several files is that tool's: nothing else
+              // could take them.
+              disabled={!!item.parts}
+              className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 mt-1 w-full rounded border px-2 py-1 text-xs disabled:opacity-60"
             >
-              {/* The current tool stays listed even when it is not built
-                  yet. Filtering it out leaves the select with no matching
+              {/* Only tools that can take this kind of file, so a PDF row is
+                  never offered an image tool and sent to a worker that cannot
+                  read it. The current tool stays listed even when it would be
+                  filtered out: dropping it leaves the select with no matching
                   option, so Chrome shows the first one and the row claims to
-                  be on a tool it is not. */}
+                  be on a tool it is not. Tools that gather several files are
+                  not offered per row; they are chosen before dropping or with
+                  the button above the queue. */}
               {ALL_TOOLS.filter(
-                (candidate) => !candidate.unavailable || candidate.id === item.toolId,
+                (candidate) =>
+                  candidate.id === item.toolId ||
+                  (!candidate.unavailable &&
+                    !candidate.combines &&
+                    candidate.accepts === item.source.kind),
               ).map((candidate) => (
                 <option key={candidate.id} value={candidate.id} disabled={!!candidate.unavailable}>
                   {candidate.label}
@@ -151,6 +168,15 @@ export function QueueRow({
               ))}
             </select>
           </label>
+
+          {item.parts && (
+            <PartsList
+              item={item}
+              onPatch={onPatch}
+              onMove={onMoveSource}
+              onRemove={onRemoveSource}
+            />
+          )}
 
           {tool && (
             <SettingsPanel
@@ -161,7 +187,7 @@ export function QueueRow({
             />
           )}
 
-          {output && item.source.kind === 'image' && (
+          {output && item.source.kind === 'image' && !item.parts && (
             <Compare original={item.source.file} result={output} />
           )}
         </div>
@@ -175,18 +201,21 @@ function Action({
   children,
   primary = false,
   label,
+  disabled = false,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   primary?: boolean;
   label?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
-      className={`rounded border px-2 py-1 text-xs ${
+      disabled={disabled}
+      className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${
         primary
           ? 'border-accent-500 bg-accent-500/10 hover:bg-accent-500/20'
           : 'border-shell-200 hover:bg-shell-100 dark:border-shell-700 dark:hover:bg-shell-800'
@@ -194,5 +223,70 @@ function Action({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * The files a many-to-one row works on: their order is the order of the result,
+ * so each can be moved, and each can carry the password it needs to open.
+ */
+function PartsList({
+  item,
+  onPatch,
+  onMove,
+  onRemove,
+}: {
+  item: QueueItem;
+  onPatch: (settings: ToolSettings) => void;
+  onMove: (sourceId: string, by: -1 | 1) => void;
+  onRemove: (sourceId: string) => void;
+}) {
+  const parts = item.parts ?? [];
+  const isPdf = item.source.kind === 'pdf';
+
+  return (
+    <ol className="space-y-1" aria-label="Files, in the order they will be joined">
+      {parts.map((part, index) => {
+        const key = openPasswordKey(part.id);
+        return (
+          <li
+            key={part.id}
+            className="border-shell-200 dark:border-shell-700 flex flex-wrap items-center gap-x-2 gap-y-1 rounded border px-2 py-1"
+          >
+            <span className="text-shell-400 w-5 font-mono text-xs">{index + 1}</span>
+            <span className="min-w-0 flex-1 truncate text-xs">{part.name}</span>
+            <span className="text-shell-400 font-mono text-xs">{formatBytes(part.size)}</span>
+            {isPdf && (
+              <input
+                type="password"
+                aria-label={`Password for ${part.name}, if it has one`}
+                placeholder="Password"
+                autoComplete="new-password"
+                value={String(item.settings[key] ?? '')}
+                onChange={(event) => onPatch({ [key]: event.target.value })}
+                className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 w-28 rounded border px-1.5 py-0.5 text-xs"
+              />
+            )}
+            <Action
+              onClick={() => onMove(part.id, -1)}
+              label={`Move ${part.name} earlier`}
+              disabled={index === 0}
+            >
+              ↑
+            </Action>
+            <Action
+              onClick={() => onMove(part.id, 1)}
+              label={`Move ${part.name} later`}
+              disabled={index === parts.length - 1}
+            >
+              ↓
+            </Action>
+            <Action onClick={() => onRemove(part.id)} label={`Take ${part.name} out`}>
+              ✕
+            </Action>
+          </li>
+        );
+      })}
+    </ol>
   );
 }

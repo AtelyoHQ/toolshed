@@ -1,9 +1,23 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import { parseSize } from '../lib/bytes';
 import { processImageInWorker, shutdownImageWorkers } from '../lib/workers/imageClient';
+import { runPdfJobInWorker, shutdownPdfWorkers } from '../lib/workers/pdfClient';
 import type { ImageSettings } from '../lib/image/pipeline';
+import {
+  openPasswordKey,
+  passwordProblem,
+  toJobOutput,
+  toPdfRequest,
+  type PdfInput,
+} from '../lib/pdfTools';
 import { toImageSettings, toolById, type Tool } from '../lib/tools';
-import { kindOf, type SourceFile, type ToolSettings } from '../lib/types';
+import {
+  kindOf,
+  type JobOutput,
+  type QueueItem,
+  type SourceFile,
+  type ToolSettings,
+} from '../lib/types';
 import { emptyQueue, queueReducer, selectors } from './queue';
 
 /**
@@ -27,7 +41,18 @@ export function useQueue() {
   const latest = useRef(state);
   latest.current = state;
 
-  useEffect(() => () => shutdownImageWorkers(), []);
+  // Rows that were handed a password and should run once it has landed in
+  // state. Running straight after the dispatch would read the row as it was
+  // before the password reached it.
+  const afterPassword = useRef(new Set<string>());
+
+  useEffect(
+    () => () => {
+      shutdownImageWorkers();
+      shutdownPdfWorkers();
+    },
+    [],
+  );
 
   const add = useCallback((files: File[], toolId: string, settings?: ToolSettings) => {
     const tool = toolById(toolId);
@@ -46,7 +71,24 @@ export function useQueue() {
 
     // Settings chosen on the first screen travel with the file; otherwise
     // the tool's own defaults.
-    dispatch({ type: 'add', sources, toolId, settings: settings ?? tool.defaults });
+    const chosen = settings ?? tool.defaults;
+
+    // A tool that makes one result from many files takes them into its one
+    // row, whatever the gesture that brought them.
+    if (tool.combines) {
+      dispatch({
+        type: 'combine',
+        toolId,
+        kind: tool.accepts,
+        settings: chosen,
+        sources,
+        absorb: [],
+        outputName: tool.combines.outputName,
+      });
+      return;
+    }
+
+    dispatch({ type: 'add', sources, toolId, settings: chosen });
   }, []);
 
   const run = useCallback(async (id: string) => {
@@ -70,32 +112,13 @@ export function useQueue() {
     dispatch({ type: 'start', id, at: Date.now(), epoch });
 
     try {
-      // Read from the File every time: the worker takes ownership of the
-      // buffer it is given, so a retry cannot reuse the previous one.
-      const bytes = new Uint8Array(await item.source.file.arrayBuffer());
-      const settings = buildSettings(item.settings, tool);
+      const report = (fraction: number) => dispatch({ type: 'progress', id, fraction, epoch });
+      const output =
+        tool.engine === 'pdf'
+          ? await runPdf(item, tool, report, controller.signal)
+          : await runImage(item, tool, report, controller.signal);
 
-      const result = await processImageInWorker(
-        bytes,
-        settings,
-        (fraction) => dispatch({ type: 'progress', id, fraction, epoch }),
-        controller.signal,
-      );
-
-      dispatch({
-        type: 'succeed',
-        id,
-        at: Date.now(),
-        epoch,
-        output: {
-          bytes: result.bytes,
-          name: renameFor(item.source.name, result.extension),
-          mime: result.mime,
-          width: result.width,
-          height: result.height,
-          ...(result.note ? { note: result.note } : {}),
-        },
-      });
+      dispatch({ type: 'succeed', id, at: Date.now(), epoch, output });
     } catch (error) {
       // A job the person cancelled is not a failure, and the reducer has
       // already marked it cancelled; saying so again would overwrite that.
@@ -106,6 +129,7 @@ export function useQueue() {
           at: Date.now(),
           epoch,
           error: error instanceof Error ? error.message : 'Something went wrong with this file.',
+          needsPassword: passwordProblem(error),
         });
       }
     } finally {
@@ -118,6 +142,19 @@ export function useQueue() {
       if (item.status === 'queued') void run(item.id);
     }
   }, [run]);
+
+  // After `run`, which it calls: declared earlier it would be a use before
+  // definition, and the effect has to see the `run` that reads `latest`.
+  useEffect(() => {
+    for (const id of afterPassword.current) {
+      const item = state.items.find((candidate) => candidate.id === id);
+      if (!item) afterPassword.current.delete(id);
+      else if (item.status === 'queued') {
+        afterPassword.current.delete(id);
+        void run(id);
+      }
+    }
+  }, [state, run]);
 
   const actions = useMemo(
     () => ({
@@ -133,6 +170,15 @@ export function useQueue() {
         dispatch({ type: 'cancel', id, at: Date.now() });
       },
       requeue: (id: string) => dispatch({ type: 'requeue', id }),
+      // Sets the password a file opens with and runs it again. The requeue
+      // is not redundant: typing the same password twice changes nothing, the
+      // reducer ignores a settings patch that changes nothing, and a row left
+      // in `error` would never run.
+      unlock: (id: string, password: string) => {
+        dispatch({ type: 'patchSettings', id, settings: { [openPasswordKey()]: password } });
+        dispatch({ type: 'requeue', id });
+        afterPassword.current.add(id);
+      },
       setTool: (id: string, toolId: string) => {
         const tool = toolById(toolId);
         if (tool) dispatch({ type: 'setTool', id, toolId, settings: tool.defaults });
@@ -145,6 +191,57 @@ export function useQueue() {
   );
 
   return { state, actions, selectors } as const;
+}
+
+async function runImage(
+  item: QueueItem,
+  tool: Tool,
+  onProgress: (fraction: number) => void,
+  signal: AbortSignal,
+): Promise<JobOutput> {
+  // Read from the File every time: the worker takes ownership of the
+  // buffer it is given, so a retry cannot reuse the previous one.
+  const bytes = new Uint8Array(await item.source.file.arrayBuffer());
+  const settings = buildSettings(item.settings, tool);
+
+  const result = await processImageInWorker(bytes, settings, onProgress, signal);
+  return {
+    bytes: result.bytes,
+    name: renameFor(item.source.name, result.extension),
+    mime: result.mime,
+    width: result.width,
+    height: result.height,
+    ...(result.note ? { note: result.note } : {}),
+  };
+}
+
+async function runPdf(
+  item: QueueItem,
+  tool: Tool,
+  onProgress: (fraction: number) => void,
+  signal: AbortSignal,
+): Promise<JobOutput> {
+  const sources = item.parts ?? [item.source];
+  const inputs: PdfInput[] = await Promise.all(
+    sources.map(async (source) => {
+      // A row of one file keeps its password under one key; a row of several
+      // keeps one per file, or the second file would be tried with the first
+      // one's password.
+      const typed = item.settings[openPasswordKey(item.parts ? source.id : undefined)];
+      return {
+        id: source.id,
+        name: source.name,
+        // Read every time, for the same reason as the image path: the worker
+        // takes the buffer.
+        bytes: new Uint8Array(await source.file.arrayBuffer()),
+        ...(typeof typed === 'string' && typed !== '' ? { password: typed } : {}),
+      };
+    }),
+  );
+
+  const { job, selection } = toPdfRequest(tool, item.settings, inputs);
+  const result = await runPdfJobInWorker(job, onProgress, signal, selection);
+  return toJobOutput(tool, item.source.name, result);
 }
 
 function buildSettings(settings: ToolSettings, tool: Tool): ImageSettings {

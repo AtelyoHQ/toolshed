@@ -1,7 +1,13 @@
 import type { PdfJob, PdfJobResult } from './pdf/jobs';
 import type { PageSelection } from './pdf/request';
 import type { Tool } from './tools';
-import { withExtension, withSuffix, type JobOutput, type ToolSettings } from './types';
+import {
+  withExtension,
+  withSuffix,
+  type JobOutput,
+  type QueueItem,
+  type ToolSettings,
+} from './types';
 
 /**
  * Turns a PDF tool's declared settings into what the PDF worker takes, and
@@ -373,4 +379,18 @@ function nameOf(
     return withExtension(withSuffix(sourceName, `-${part}`), extension);
   }
   return withExtension(withSuffix(sourceName, SUFFIX[tool.id] ?? ''), extension);
+}
+
+/**
+ * Whether a failure is the PDF asking for a password, and which kind of ask.
+ *
+ * By class name, because that is all that survives the trip back from the
+ * worker: Comlink rebuilds an error from its message and name, so
+ * `instanceof` is false on this side.
+ */
+export function passwordProblem(error: unknown): QueueItem['needsPassword'] {
+  const name = (error as { name?: unknown } | null)?.name;
+  if (name === 'PasswordRequiredError') return 'missing';
+  if (name === 'WrongPasswordError') return 'wrong';
+  return undefined;
 }

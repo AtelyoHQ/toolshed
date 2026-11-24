@@ -1,5 +1,6 @@
 import * as Comlink from 'comlink';
 import type { PdfJob, PdfJobResult } from '../pdf/jobs';
+import type { PageSelection } from '../pdf/request';
 import type { PdfWorkerApi } from './pdf.worker';
 import { defaultPoolSize, WorkerPool } from './pool';
 
@@ -41,15 +42,24 @@ function pdfPool(): WorkerPool<PdfWorkerApi> {
  * WebAssembly call and a page render both run to completion. That matters
  * more here than for an image — cancelling a queue of thirty documents is
  * cancelling minutes of work, not seconds.
+ *
+ * A `selection` is a page selection as typed, resolved in the worker against
+ * the document it is applied to; see `PageSelection`.
  */
 export function runPdfJobInWorker(
   job: PdfJob,
   onProgress?: (fraction: number) => void,
   signal?: AbortSignal,
+  selection?: PageSelection,
 ): Promise<PdfJobResult> {
   const buffers = [...new Set(inputBuffers(job))];
   return pdfPool().run(
-    (worker) => worker.run(Comlink.transfer(job, buffers), Comlink.proxy(onProgress ?? (() => {}))),
+    (worker) =>
+      worker.run(
+        Comlink.transfer(job, buffers),
+        Comlink.proxy(onProgress ?? (() => {})),
+        selection,
+      ),
     signal,
   );
 }

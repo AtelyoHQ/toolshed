@@ -24,4 +24,6 @@ export interface PdfPart extends PdfResult {
 export interface PdfSource {
   bytes: Uint8Array;
   password?: string;
+  /** Only used to say which document a failure came from. */
+  name?: string;
 }

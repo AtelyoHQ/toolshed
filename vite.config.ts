@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { BUNDLED_LICENCES, licencePath } from './scripts/licences.mjs';
 import { createRequire } from 'node:module';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
@@ -186,6 +187,44 @@ function pdfjsAwareAssetNames(asset: { originalFileNames?: readonly string[] }):
     : 'assets/[name]-[hash][extname]';
 }
 
+/**
+ * Ships the licence text of the third-party code inside the bundle.
+ *
+ * Mostly a courtesy, except for libheif, where it is not: that is LGPL-3.0,
+ * and distributing a build without its notice and without saying how to
+ * replace it does not meet the licence. pdf.js already carries its own
+ * notices beside its runtime assets, so this covers the rest.
+ */
+function emitLicenceNotices(): Plugin {
+  return {
+    name: 'toolshed:licence-notices',
+    async generateBundle() {
+      const index: string[] = [
+        'Toolshed is MIT licensed. The third-party code inside this build keeps',
+        'its own terms, listed below with the full text of each licence.',
+        '',
+      ];
+
+      for (const entry of BUNDLED_LICENCES) {
+        const text = await readFile(new URL(`./${entry.file}`, import.meta.url), 'utf8');
+        const path = licencePath(entry.package);
+        this.emitFile({ type: 'asset', fileName: path, source: text });
+
+        index.push(`${entry.package} — ${entry.licence}`);
+        if (entry.note) index.push(`  ${entry.note}`);
+        index.push(`  ${path}`, '');
+      }
+
+      index.push(
+        'pdf.js and the libraries inside it ship their notices beside their own',
+        'runtime assets, under assets/pdfjs-<version>/.',
+        '',
+      );
+      this.emitFile({ type: 'asset', fileName: 'licences/index.txt', source: index.join('\n') });
+    },
+  };
+}
+
 export default defineConfig({
   // Relative, so dist/ runs from any subdirectory. The app routes on the URL
   // hash rather than the path for the same reason: a path route would make
@@ -193,6 +232,7 @@ export default defineConfig({
   base: './',
   plugins: [
     emitPrivacyStatement(),
+    emitLicenceNotices(),
     react(),
     tailwindcss(),
     VitePWA({

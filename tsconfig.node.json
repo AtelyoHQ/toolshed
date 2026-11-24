@@ -10,5 +10,10 @@
     "composite": true,
     "skipLibCheck": true
   },
-  "include": ["vite.config.ts", "vitest.config.ts", "playwright.config.ts"]
+  "include": [
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "scripts/licences.d.mts"
+  ]
 }

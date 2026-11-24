@@ -11,4 +11,6 @@ test-results/
 .env
 .env.*
 *.tsbuildinfo
+
+# Agent worktrees: whole checkouts of this repo, never part of it.
 .claude/

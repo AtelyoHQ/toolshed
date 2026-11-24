@@ -78,6 +78,34 @@ describe('runPdfJob', () => {
     expect(result.note).toMatch(/Split into 2 documents/);
   });
 
+  it('says so when the pieces of a locked document are not locked', async () => {
+    const locked = await buildEncryptedPdf({
+      userPassword: 'secret',
+      pages: [
+        { width: 101, height: 400 },
+        { width: 102, height: 400 },
+      ],
+    });
+    const result = await runPdfJob(
+      { op: 'split', bytes: locked, options: { mode: 'pages', password: 'secret' } },
+      deps(),
+    );
+    expect(result.note).toMatch(/password/i);
+    expect(result.note).toMatch(/Split into 2 documents/);
+  });
+
+  it('does not call one piece several documents', async () => {
+    const result = await runPdfJob(
+      {
+        op: 'split',
+        bytes: await buildPdf([{ width: 101, height: 400 }]),
+        options: { mode: 'pages' },
+      },
+      deps(),
+    );
+    expect(result.note).toBe('Split into 1 document.');
+  });
+
   it('reorders, rotates, deletes and extracts', async () => {
     const bytes = await twoPages();
     const jobs = [

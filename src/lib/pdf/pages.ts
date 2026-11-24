@@ -45,10 +45,18 @@ export async function mergeDocuments(sources: readonly PdfSource[]): Promise<Pdf
   // needs none, which the note has to say.
   let unlocked: string | undefined;
   for (const source of sources) {
-    const doc = await loadDocument(source.bytes, { password: source.password });
-    requirePages(doc);
-    unlocked ??= resultNote(doc);
-    await copyAll(merged, doc);
+    try {
+      const doc = await loadDocument(source.bytes, { password: source.password });
+      requirePages(doc);
+      unlocked ??= resultNote(doc);
+      await copyAll(merged, doc);
+    } catch (error) {
+      // With a dozen documents, "this PDF is password-protected" does not say
+      // which one. Prefixed rather than wrapped, so the error keeps its class
+      // and the interface can still tell a password problem from a damaged file.
+      if (error instanceof Error && source.name) error.message = `${source.name}: ${error.message}`;
+      throw error;
+    }
   }
 
   const bytes = await saveDocument(merged);

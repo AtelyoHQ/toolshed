@@ -1,7 +1,8 @@
 import * as Comlink from 'comlink';
 import { decodeImage, encodeImage } from '../image/codecs';
 import type { JpegCodec } from '../pdf/jpegStreams';
-import { runPdfJob, type PdfJob, type PdfJobResult } from '../pdf/jobs';
+import type { PdfJob, PdfJobResult } from '../pdf/jobs';
+import { runPdfRequest, type PageSelection } from '../pdf/request';
 import { pdfjsRasterizer, pdfjsTextReader } from '../pdf/pdfjs';
 import { installNetGuard } from '../netguard';
 
@@ -29,13 +30,18 @@ const jpeg: JpegCodec = {
 };
 
 export interface PdfWorkerApi {
-  run(job: PdfJob, onProgress: (fraction: number) => void): Promise<PdfJobResult>;
+  run(
+    job: PdfJob,
+    onProgress: (fraction: number) => void,
+    selection?: PageSelection,
+  ): Promise<PdfJobResult>;
 }
 
 const api: PdfWorkerApi = {
-  async run(job, onProgress) {
-    const result = await runPdfJob(
+  async run(job, onProgress, selection) {
+    const result = await runPdfRequest(
       job,
+      selection,
       { jpeg, rasterizer: pdfjsRasterizer, textReader: pdfjsTextReader },
       (fraction) => {
         // Comlink proxies the callback; failures reporting progress must not

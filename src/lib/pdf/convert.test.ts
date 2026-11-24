@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildPdf, latin1, tinyJpeg, tinyJpegWithExif, tinyPng } from '../../../test/pdfFixtures';
+import {
+  buildPdf,
+  latin1,
+  pageOperators,
+  tinyJpeg,
+  tinyJpegWithExif,
+  tinyJpegWithOrientation,
+  tinyPng,
+} from '../../../test/pdfFixtures';
 import { imagesToPdf, pdfToImages, pdfToText, placeImage } from './convert';
 import { loadDocument } from './document';
 import { PageSelectionError, PdfOperationError } from './errors';
@@ -69,6 +77,78 @@ describe('placeImage', () => {
     expect(() =>
       placeImage({ width: 10, height: 10 }, { width: 100, height: 100 }, 'contain', 50),
     ).toThrow(PdfOperationError);
+  });
+});
+
+/**
+ * Where a corner of the image lands on the page, from the transformation
+ * matrices the page's content stream applies before it draws the picture.
+ * `(0, 1)` is the image's own top-left, `(1, 1)` its top-right.
+ */
+async function landing(bytes: Uint8Array, corner: [number, number]): Promise<[number, number]> {
+  const operators = await pageOperators(bytes, 0);
+  const matrices = [...operators.matchAll(/((?:-?[\d.]+(?:e-?\d+)?\s+){6})cm/g)].map((match) =>
+    match[1]!.trim().split(/\s+/).map(Number),
+  );
+  let [x, y] = corner;
+  // Concatenation: the last matrix in the stream is the first applied.
+  for (const [a, b, c, d, e, f] of matrices.reverse() as Array<
+    [number, number, number, number, number, number]
+  >) {
+    [x, y] = [a * x + c * y + e, b * x + d * y + f];
+  }
+  return [Math.round(x * 100) / 100, Math.round(y * 100) / 100];
+}
+
+describe('imagesToPdf orientation', () => {
+  // A 300 by 150 sensor image. Held upright, a phone writes this with a tag
+  // saying how far to turn it, and the tag is stripped before embedding.
+  const photo = (orientation: number) =>
+    tinyJpegWithOrientation(orientation, { width: 300, height: 150 });
+  const options = { sizing: { mode: 'image' } } as const;
+
+  it('makes a page the shape the photograph is shown in', async () => {
+    const result = await imagesToPdf([{ bytes: photo(6) }], options);
+    expect(await sizesOf(result.bytes)).toEqual([{ width: 150, height: 300 }]);
+  });
+
+  it('turns a photograph a quarter clockwise, its top going to the right', async () => {
+    const { bytes } = await imagesToPdf([{ bytes: photo(6) }], options);
+    expect(await landing(bytes, [0, 1])).toEqual([150, 300]);
+    expect(await landing(bytes, [1, 1])).toEqual([150, 0]);
+    expect(await landing(bytes, [0, 0])).toEqual([0, 300]);
+  });
+
+  it('turns it a half, and three quarters', async () => {
+    const half = (await imagesToPdf([{ bytes: photo(3) }], options)).bytes;
+    expect(await sizesOf(half)).toEqual([{ width: 300, height: 150 }]);
+    expect(await landing(half, [0, 1])).toEqual([300, 0]);
+
+    const back = (await imagesToPdf([{ bytes: photo(8) }], options)).bytes;
+    expect(await sizesOf(back)).toEqual([{ width: 150, height: 300 }]);
+    expect(await landing(back, [0, 1])).toEqual([0, 0]);
+    expect(await landing(back, [1, 1])).toEqual([0, 300]);
+  });
+
+  it('leaves an upright photograph where it was', async () => {
+    const { bytes } = await imagesToPdf([{ bytes: photo(1) }], options);
+    expect(await landing(bytes, [0, 1])).toEqual([0, 150]);
+    expect(await landing(bytes, [1, 0])).toEqual([300, 0]);
+  });
+
+  it('fits a turned photograph inside a fixed page by its shown shape', async () => {
+    const { bytes } = await imagesToPdf([{ bytes: photo(6) }], {
+      sizing: { mode: 'fixed', width: 200, height: 400, fit: 'contain' },
+    });
+    // 150 by 300 shown, scaled to the page's 200 width: 200 by 400, filling it.
+    expect(await landing(bytes, [0, 1])).toEqual([200, 400]);
+    expect(await landing(bytes, [1, 0])).toEqual([0, 0]);
+  });
+
+  it('refuses a mirrored photograph and names it', async () => {
+    await expect(imagesToPdf([{ bytes: photo(5), name: 'selfie.jpg' }], options)).rejects.toThrow(
+      /selfie\.jpg is stored mirrored/,
+    );
   });
 });
 

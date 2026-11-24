@@ -38,6 +38,18 @@ export interface JobOutput {
 export interface QueueItem {
   id: string;
   source: SourceFile;
+  /**
+   * The files a many-to-one tool works on (merge, images to PDF), in the
+   * order it will use them.
+   *
+   * The queue is one row per file, and "join these into one" does not fit it:
+   * a result per file is not what was asked for. Rather than let a job reach
+   * across rows, such a tool owns a single row of its own, and everything
+   * that already holds for a row — the epoch, cancelling, retrying, the one
+   * output — holds for it unchanged. `source` is then a stand-in: named for the
+   * result, as large as its parts together, with an empty file nothing reads.
+   */
+  parts?: SourceFile[];
   toolId: string;
   settings: ToolSettings;
   /**
@@ -79,6 +91,13 @@ export interface QueueItem {
   progress: number | null;
   output?: JobOutput;
   error?: string;
+  /**
+   * Why the job failed, when the fix is a password rather than a retry. The
+   * message alone cannot drive the interface: it is prose, and a row that has
+   * to ask for something must not decide that by matching on English.
+   * `wrong` is a password that was tried and did not open the file.
+   */
+  needsPassword?: 'missing' | 'wrong';
   startedAt?: number;
   finishedAt?: number;
 }

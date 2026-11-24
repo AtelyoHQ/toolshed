@@ -1,8 +1,9 @@
 import { useCallback, useState } from 'react';
 import { formatBytes, formatDelta } from './lib/bytes';
 import { saveBlob } from './lib/download';
-import { toolById, toolForDrop, type Tool } from './lib/tools';
+import { ALL_TOOLS, toolById, toolForDrop, type Tool } from './lib/tools';
 import { kindOf, type ToolSettings } from './lib/types';
+import { outputFiles } from './lib/outputs';
 import { zipFiles } from './lib/zip';
 import { DropZone } from './components/DropZone';
 import { Header } from './components/Header';
@@ -45,8 +46,14 @@ export default function App() {
         // would silently throw away resolution on a Compress row.
         actions.add([file], chosen.id, chosen.id === toolId ? defaults : chosen.defaults);
       }
+      // A password typed on this screen belongs to the files it was typed for.
+      // Left in place it would lock the next file dropped with it, silently,
+      // and a password nobody remembers choosing cannot be recovered.
+      if (tool.fields.some((field) => field.type === 'text' && field.secret)) {
+        setDefaults(tool.defaults);
+      }
     },
-    [actions, defaults, toolId],
+    [actions, defaults, tool, toolId],
   );
 
   const done = selectors.done(state);
@@ -54,23 +61,44 @@ export default function App() {
   // against the output of the few that have run reports a saving nobody
   // achieved, and it is wrong for the whole middle of a batch — which is
   // most of the time anyone is looking at it.
-  const original = done.reduce((sum, item) => sum + item.source.size, 0);
-  const produced = done.reduce((sum, item) => sum + outputBytes(item), 0);
+  //
+  // Only from the tools whose result is meant to be smaller. A PDF turned into
+  // text or split into pages would otherwise be averaged in as a saving or a
+  // loss that nobody was after.
+  const measured = done.filter((item) => !toolById(item.toolId)?.hideDelta);
+  const original = measured.reduce((sum, item) => sum + item.source.size, 0);
+  const produced = measured.reduce((sum, item) => sum + outputBytes(item), 0);
+
+  // Counted in files, not rows: a split is one row and thirty files, and the
+  // button says what ends up in the archive.
+  const fileCount = done.reduce(
+    (sum, item) => sum + (item.output ? outputFiles(item.output).length : 0),
+    0,
+  );
 
   const saveAll = useCallback(async () => {
     setZipping(true);
     try {
+      // Every file a job made, not the first: a split row is thirty files.
       const archive = await zipFiles(
-        done.map((item) => ({
-          name: item.output?.name ?? item.source.name,
-          bytes: item.output?.bytes ?? new Uint8Array(),
-        })),
+        done.flatMap((item) => (item.output ? outputFiles(item.output) : [])),
       );
       await saveBlob(archive, 'toolshed.zip');
     } finally {
       setZipping(false);
     }
   }, [done]);
+
+  // What the waiting rows could be folded into. A tool that makes one file
+  // from many cannot be picked in the grid after the files are already here,
+  // since the grid is only on screen while the queue is empty.
+  const gatherable = ALL_TOOLS.flatMap((candidate) => {
+    if (!candidate.combines) return [];
+    const waiting = state.items.filter(
+      (item) => item.status === 'queued' && !item.parts && item.source.kind === candidate.accepts,
+    ).length;
+    return waiting >= candidate.combines.min ? [{ tool: candidate, waiting }] : [];
+  });
 
   const empty = state.items.length === 0;
 
@@ -123,8 +151,19 @@ export default function App() {
                   disabled={done.length === 0 || zipping}
                   className="border-shell-200 hover:bg-shell-100 dark:border-shell-700 dark:hover:bg-shell-800 rounded border px-3 py-1.5 text-sm disabled:opacity-40"
                 >
-                  {zipping ? 'Packing…' : `Save all (${done.length})`}
+                  {zipping ? 'Packing…' : `Save all (${fileCount})`}
                 </button>
+
+                {gatherable.map(({ tool: combining, waiting }) => (
+                  <button
+                    key={combining.id}
+                    type="button"
+                    onClick={() => actions.gather(combining.id)}
+                    className="border-shell-200 hover:bg-shell-100 dark:border-shell-700 dark:hover:bg-shell-800 rounded border px-3 py-1.5 text-sm"
+                  >
+                    {combining.combines?.action} ({waiting})
+                  </button>
+                ))}
 
                 <button
                   type="button"
@@ -158,6 +197,9 @@ export default function App() {
                       onRemove={() => actions.remove(id)}
                       onPatch={(settings) => actions.patch(id, settings)}
                       onSetTool={(next) => actions.setTool(id, next)}
+                      onUnlock={(password) => actions.unlock(id, password)}
+                      onMoveSource={(sourceId, by) => actions.moveSource(id, sourceId, by)}
+                      onRemoveSource={(sourceId) => actions.removeSource(id, sourceId)}
                     />
                   );
                 })}

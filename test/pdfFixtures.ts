@@ -390,6 +390,32 @@ export function tinyJpegWithExif(text = 'GPSLatitude 51.5074 CAMERA-SERIAL-123')
   return out;
 }
 
+/**
+ * A JPEG whose EXIF carries only an orientation, which is all a phone adds
+ * that matters to how the picture is shown.
+ */
+export function tinyJpegWithOrientation(
+  orientation: number,
+  options: { width?: number; height?: number } = {},
+): Uint8Array {
+  const jpeg = tinyJpeg({ ...options, size: 2048 });
+  const payload = [
+    ...[0x45, 0x78, 0x69, 0x66, 0x00, 0x00], // "Exif\0\0"
+    ...[0x49, 0x49, 0x2a, 0x00, 0x08, 0x00, 0x00, 0x00], // little-endian TIFF, IFD at 8
+    ...[0x01, 0x00], // one entry
+    ...[0x12, 0x01, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, orientation, 0x00, 0x00, 0x00],
+    ...[0x00, 0x00, 0x00, 0x00], // no next IFD
+  ];
+  const length = payload.length + 2;
+  const segment = [0xff, 0xe1, (length >> 8) & 0xff, length & 0xff, ...payload];
+
+  const out = new Uint8Array(jpeg.length + segment.length);
+  out.set(jpeg.subarray(0, 2), 0);
+  out.set(segment, 2);
+  out.set(jpeg.subarray(2), 2 + segment.length);
+  return out;
+}
+
 /** A real, decodable PNG: deflate comes from Node, so the IDAT is genuine. */
 export function tinyPng(width = 10, height = 6): Uint8Array {
   const raw: number[] = [];

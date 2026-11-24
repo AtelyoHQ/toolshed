@@ -334,3 +334,24 @@ describe('extractPages', () => {
     expect(await widthsOf(result.bytes)).toEqual([222]);
   });
 });
+
+describe('mergeDocuments failures', () => {
+  it('says which document could not be opened', async () => {
+    const locked = await buildEncryptedPdf({ userPassword: 'secret' });
+    const open = await buildPdf([{ width: 100, height: 100 }]);
+
+    const failure = await mergeDocuments([
+      { bytes: open, name: 'fine.pdf' },
+      { bytes: locked, name: 'locked.pdf' },
+    ]).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(PasswordRequiredError);
+    expect((failure as Error).message).toMatch(/^locked\.pdf: /);
+  });
+
+  it('leaves the message alone when no name was given', async () => {
+    const locked = await buildEncryptedPdf({ userPassword: 'secret' });
+    const failure = await mergeDocuments([{ bytes: locked }]).catch((error: unknown) => error);
+    expect((failure as Error).message).toMatch(/^This PDF is password-protected/);
+  });
+});

@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { formatBytes, formatDelta } from '../lib/bytes';
-import { saveBytes } from '../lib/download';
+import { outputFiles, saveOutput } from '../lib/outputs';
+import { openPasswordKey } from '../lib/pdfTools';
 import { ALL_TOOLS, toolById } from '../lib/tools';
-import type { QueueItem, ToolSettings } from '../lib/types';
+import { withExtension, type QueueItem, type ToolSettings } from '../lib/types';
+import { outputBytes } from '../state/queue';
 import { Compare } from './Compare';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -14,6 +16,9 @@ interface Props {
   onRemove: () => void;
   onPatch: (settings: ToolSettings) => void;
   onSetTool: (toolId: string) => void;
+  onMoveSource: (sourceId: string, by: -1 | 1) => void;
+  onRemoveSource: (sourceId: string) => void;
+  onUnlock: (password: string) => void;
 }
 
 const STATUS_LABEL: Record<QueueItem['status'], string> = {
@@ -32,10 +37,27 @@ export function QueueRow({
   onRemove,
   onPatch,
   onSetTool,
+  onMoveSource,
+  onRemoveSource,
+  onUnlock,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const tool = toolById(item.toolId);
   const output = item.output;
+
+  // A merge that cannot open one of its files says which in its message, and
+  // the field for that file's password is in the list. Opened for the person,
+  // or the row shows an error with the fix folded away.
+  const asksForPassword = item.needsPassword !== undefined && !!item.parts;
+  useEffect(() => {
+    if (asksForPassword) setOpen(true);
+  }, [asksForPassword]);
+  // Every file the job made. The size beside the name is all of them, or a
+  // split of a 10 MB document would read as 400 KB because only its first
+  // page was counted.
+  const fileCount = output ? outputFiles(output).length : 0;
+  const producedBytes = output ? outputBytes(item) : 0;
 
   return (
     <li className="border-shell-200 dark:border-shell-700 rounded border">
@@ -48,20 +70,24 @@ export function QueueRow({
         >
           <span className="block truncate text-sm font-medium">{item.source.name}</span>
           <span className="text-shell-400 font-mono text-xs">
+            {item.parts && `${item.parts.length} ${item.parts.length === 1 ? 'file' : 'files'}, `}
             {formatBytes(item.source.size)}
             {output && (
               <>
                 {' → '}
                 <span className="text-shell-200 dark:text-shell-100">
-                  {formatBytes(output.bytes.byteLength)}
+                  {fileCount > 1 && `${fileCount} files, `}
+                  {formatBytes(producedBytes)}
                 </span>{' '}
-                <span
-                  className={
-                    output.bytes.byteLength <= item.source.size ? 'text-good-500' : 'text-warn-500'
-                  }
-                >
-                  {formatDelta(item.source.size, output.bytes.byteLength)}
-                </span>
+                {!tool?.hideDelta && (
+                  <span
+                    className={
+                      producedBytes <= item.source.size ? 'text-good-500' : 'text-warn-500'
+                    }
+                  >
+                    {formatDelta(item.source.size, producedBytes)}
+                  </span>
+                )}
               </>
             )}
           </span>
@@ -73,7 +99,9 @@ export function QueueRow({
           aria-atomic="true"
         >
           {STATUS_LABEL[item.status]}
-          {item.status === 'running' && item.progress !== null
+          {/* Not "0%": most PDF operations are one step and report nothing until
+              they finish, and a stuck-looking zero says less than no number. */}
+          {item.status === 'running' && item.progress !== null && item.progress > 0
             ? ` ${Math.round(item.progress * 100)}%`
             : ''}
         </span>
@@ -85,8 +113,18 @@ export function QueueRow({
             <Action onClick={onRequeue}>Retry</Action>
           )}
           {output && (
-            <Action onClick={() => void saveBytes(output.bytes, output.name, output.mime)} primary>
-              Save
+            <Action
+              onClick={() => {
+                setSaveError(null);
+                // A failed write must not vanish into an unhandled rejection:
+                // the row says Done, and the person has no file.
+                saveOutput(output, withExtension(item.source.name, 'zip')).catch((error: unknown) =>
+                  setSaveError(error instanceof Error ? error.message : 'Could not save.'),
+                );
+              }}
+              primary
+            >
+              {fileCount > 1 ? `Save ${fileCount}` : 'Save'}
             </Action>
           )}
           <Action onClick={onRemove} label={`Remove ${item.source.name}`}>
@@ -105,6 +143,10 @@ export function QueueRow({
       )}
 
       {item.error && <p className="text-bad-500 px-3 pb-2 text-xs">{item.error}</p>}
+      {item.needsPassword && !item.parts && (
+        <PasswordPrompt id={item.id} name={item.source.name} onSubmit={onUnlock} />
+      )}
+      {saveError && <p className="text-bad-500 px-3 pb-2 text-xs">{saveError}</p>}
       {output?.note && <p className="text-shell-400 px-3 pb-2 text-xs">{output.note}</p>}
 
       {open && (
@@ -114,14 +156,25 @@ export function QueueRow({
             <select
               value={item.toolId}
               onChange={(event) => onSetTool(event.target.value)}
-              className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 mt-1 w-full rounded border px-2 py-1 text-xs"
+              // A row that owns several files is that tool's: nothing else
+              // could take them.
+              disabled={!!item.parts}
+              className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 mt-1 w-full rounded border px-2 py-1 text-xs disabled:opacity-60"
             >
-              {/* The current tool stays listed even when it is not built
-                  yet. Filtering it out leaves the select with no matching
+              {/* Only tools that can take this kind of file, so a PDF row is
+                  never offered an image tool and sent to a worker that cannot
+                  read it. The current tool stays listed even when it would be
+                  filtered out: dropping it leaves the select with no matching
                   option, so Chrome shows the first one and the row claims to
-                  be on a tool it is not. */}
+                  be on a tool it is not. Tools that gather several files are
+                  not offered per row; they are chosen before dropping or with
+                  the button above the queue. */}
               {ALL_TOOLS.filter(
-                (candidate) => !candidate.unavailable || candidate.id === item.toolId,
+                (candidate) =>
+                  candidate.id === item.toolId ||
+                  (!candidate.unavailable &&
+                    !candidate.combines &&
+                    candidate.accepts === item.source.kind),
               ).map((candidate) => (
                 <option key={candidate.id} value={candidate.id} disabled={!!candidate.unavailable}>
                   {candidate.label}
@@ -130,6 +183,15 @@ export function QueueRow({
               ))}
             </select>
           </label>
+
+          {item.parts && (
+            <PartsList
+              item={item}
+              onPatch={onPatch}
+              onMove={onMoveSource}
+              onRemove={onRemoveSource}
+            />
+          )}
 
           {tool && (
             <SettingsPanel
@@ -140,7 +202,7 @@ export function QueueRow({
             />
           )}
 
-          {output && item.source.kind === 'image' && (
+          {output && item.source.kind === 'image' && !item.parts && (
             <Compare original={item.source.file} result={output} />
           )}
         </div>
@@ -154,18 +216,21 @@ function Action({
   children,
   primary = false,
   label,
+  disabled = false,
 }: {
   onClick: () => void;
   children: React.ReactNode;
   primary?: boolean;
   label?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label={label}
-      className={`rounded border px-2 py-1 text-xs ${
+      disabled={disabled}
+      className={`rounded border px-2 py-1 text-xs disabled:opacity-40 ${
         primary
           ? 'border-accent-500 bg-accent-500/10 hover:bg-accent-500/20'
           : 'border-shell-200 hover:bg-shell-100 dark:border-shell-700 dark:hover:bg-shell-800'
@@ -173,5 +238,118 @@ function Action({
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * The files a many-to-one row works on: their order is the order of the result,
+ * so each can be moved, and each can carry the password it needs to open.
+ */
+function PartsList({
+  item,
+  onPatch,
+  onMove,
+  onRemove,
+}: {
+  item: QueueItem;
+  onPatch: (settings: ToolSettings) => void;
+  onMove: (sourceId: string, by: -1 | 1) => void;
+  onRemove: (sourceId: string) => void;
+}) {
+  const parts = item.parts ?? [];
+  const isPdf = item.source.kind === 'pdf';
+
+  return (
+    <ol className="space-y-1" aria-label="Files, in the order they will be joined">
+      {parts.map((part, index) => {
+        const key = openPasswordKey(part.id);
+        return (
+          <li
+            key={part.id}
+            className="border-shell-200 dark:border-shell-700 flex flex-wrap items-center gap-x-2 gap-y-1 rounded border px-2 py-1"
+          >
+            <span className="text-shell-400 w-5 font-mono text-xs">{index + 1}</span>
+            <span className="min-w-0 flex-1 truncate text-xs">{part.name}</span>
+            <span className="text-shell-400 font-mono text-xs">{formatBytes(part.size)}</span>
+            {isPdf && (
+              <input
+                type="password"
+                aria-label={`Password for ${part.name}, if it has one`}
+                placeholder="Password"
+                autoComplete="new-password"
+                value={String(item.settings[key] ?? '')}
+                onChange={(event) => onPatch({ [key]: event.target.value })}
+                className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 w-28 rounded border px-1.5 py-0.5 text-xs"
+              />
+            )}
+            <Action
+              onClick={() => onMove(part.id, -1)}
+              label={`Move ${part.name} earlier`}
+              disabled={index === 0}
+            >
+              ↑
+            </Action>
+            <Action
+              onClick={() => onMove(part.id, 1)}
+              label={`Move ${part.name} later`}
+              disabled={index === parts.length - 1}
+            >
+              ↓
+            </Action>
+            <Action onClick={() => onRemove(part.id)} label={`Take ${part.name} out`}>
+              ✕
+            </Action>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/**
+ * Asks for the password a file needs before anything can be read from it.
+ *
+ * Its own small form with its own state, not a settings field: a field would
+ * write to the row on every keystroke, and a settings change clears the very
+ * prompt that is being typed into. The password goes to the row once, on
+ * submit, and runs the job.
+ */
+function PasswordPrompt({
+  id: rowId,
+  name,
+  onSubmit,
+}: {
+  id: string;
+  name: string;
+  onSubmit: (password: string) => void;
+}) {
+  const [password, setPassword] = useState('');
+  const id = `unlock-${rowId}`;
+
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 px-3 pb-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (password !== '') onSubmit(password);
+      }}
+    >
+      <label htmlFor={id} className="text-xs font-medium">
+        Password for {name}
+      </label>
+      <input
+        id={id}
+        type="password"
+        value={password}
+        // This is a password for a file, not an account: a browser offering to
+        // save it for this site would be keeping what the page should forget.
+        autoComplete="new-password"
+        onChange={(event) => setPassword(event.target.value)}
+        className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 w-44 rounded border px-2 py-1 text-xs"
+      />
+      <Action onClick={() => password !== '' && onSubmit(password)} primary>
+        Unlock
+      </Action>
+    </form>
   );
 }

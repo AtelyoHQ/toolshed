@@ -46,8 +46,14 @@ export default function App() {
         // would silently throw away resolution on a Compress row.
         actions.add([file], chosen.id, chosen.id === toolId ? defaults : chosen.defaults);
       }
+      // A password typed on this screen belongs to the files it was typed for.
+      // Left in place it would lock the next file dropped with it, silently,
+      // and a password nobody remembers choosing cannot be recovered.
+      if (tool.fields.some((field) => field.type === 'text' && field.secret)) {
+        setDefaults(tool.defaults);
+      }
     },
-    [actions, defaults, toolId],
+    [actions, defaults, tool, toolId],
   );
 
   const done = selectors.done(state);
@@ -191,6 +197,7 @@ export default function App() {
                       onRemove={() => actions.remove(id)}
                       onPatch={(settings) => actions.patch(id, settings)}
                       onSetTool={(next) => actions.setTool(id, next)}
+                      onUnlock={(password) => actions.unlock(id, password)}
                       onMoveSource={(sourceId, by) => actions.moveSource(id, sourceId, by)}
                       onRemoveSource={(sourceId) => actions.removeSource(id, sourceId)}
                     />

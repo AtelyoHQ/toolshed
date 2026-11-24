@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { formatBytes, formatDelta } from '../lib/bytes';
 import { outputFiles, saveOutput } from '../lib/outputs';
 import { openPasswordKey } from '../lib/pdfTools';
@@ -18,6 +18,7 @@ interface Props {
   onSetTool: (toolId: string) => void;
   onMoveSource: (sourceId: string, by: -1 | 1) => void;
   onRemoveSource: (sourceId: string) => void;
+  onUnlock: (password: string) => void;
 }
 
 const STATUS_LABEL: Record<QueueItem['status'], string> = {
@@ -38,11 +39,20 @@ export function QueueRow({
   onSetTool,
   onMoveSource,
   onRemoveSource,
+  onUnlock,
 }: Props) {
   const [open, setOpen] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const tool = toolById(item.toolId);
   const output = item.output;
+
+  // A merge that cannot open one of its files says which in its message, and
+  // the field for that file's password is in the list. Opened for the person,
+  // or the row shows an error with the fix folded away.
+  const asksForPassword = item.needsPassword !== undefined && !!item.parts;
+  useEffect(() => {
+    if (asksForPassword) setOpen(true);
+  }, [asksForPassword]);
   // Every file the job made. The size beside the name is all of them, or a
   // split of a 10 MB document would read as 400 KB because only its first
   // page was counted.
@@ -89,7 +99,9 @@ export function QueueRow({
           aria-atomic="true"
         >
           {STATUS_LABEL[item.status]}
-          {item.status === 'running' && item.progress !== null
+          {/* Not "0%": most PDF operations are one step and report nothing until
+              they finish, and a stuck-looking zero says less than no number. */}
+          {item.status === 'running' && item.progress !== null && item.progress > 0
             ? ` ${Math.round(item.progress * 100)}%`
             : ''}
         </span>
@@ -131,6 +143,9 @@ export function QueueRow({
       )}
 
       {item.error && <p className="text-bad-500 px-3 pb-2 text-xs">{item.error}</p>}
+      {item.needsPassword && !item.parts && (
+        <PasswordPrompt id={item.id} name={item.source.name} onSubmit={onUnlock} />
+      )}
       {saveError && <p className="text-bad-500 px-3 pb-2 text-xs">{saveError}</p>}
       {output?.note && <p className="text-shell-400 px-3 pb-2 text-xs">{output.note}</p>}
 
@@ -288,5 +303,53 @@ function PartsList({
         );
       })}
     </ol>
+  );
+}
+
+/**
+ * Asks for the password a file needs before anything can be read from it.
+ *
+ * Its own small form with its own state, not a settings field: a field would
+ * write to the row on every keystroke, and a settings change clears the very
+ * prompt that is being typed into. The password goes to the row once, on
+ * submit, and runs the job.
+ */
+function PasswordPrompt({
+  id: rowId,
+  name,
+  onSubmit,
+}: {
+  id: string;
+  name: string;
+  onSubmit: (password: string) => void;
+}) {
+  const [password, setPassword] = useState('');
+  const id = `unlock-${rowId}`;
+
+  return (
+    <form
+      className="flex flex-wrap items-center gap-2 px-3 pb-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (password !== '') onSubmit(password);
+      }}
+    >
+      <label htmlFor={id} className="text-xs font-medium">
+        Password for {name}
+      </label>
+      <input
+        id={id}
+        type="password"
+        value={password}
+        // This is a password for a file, not an account: a browser offering to
+        // save it for this site would be keeping what the page should forget.
+        autoComplete="new-password"
+        onChange={(event) => setPassword(event.target.value)}
+        className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 w-44 rounded border px-2 py-1 text-xs"
+      />
+      <Action onClick={() => password !== '' && onSubmit(password)} primary>
+        Unlock
+      </Action>
+    </form>
   );
 }

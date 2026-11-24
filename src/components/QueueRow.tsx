@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { formatBytes, formatDelta } from '../lib/bytes';
-import { saveBytes } from '../lib/download';
+import { outputFiles, saveOutput } from '../lib/outputs';
 import { ALL_TOOLS, toolById } from '../lib/tools';
-import type { QueueItem, ToolSettings } from '../lib/types';
+import { withExtension, type QueueItem, type ToolSettings } from '../lib/types';
+import { outputBytes } from '../state/queue';
 import { Compare } from './Compare';
 import { SettingsPanel } from './SettingsPanel';
 
@@ -34,8 +35,14 @@ export function QueueRow({
   onSetTool,
 }: Props) {
   const [open, setOpen] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const tool = toolById(item.toolId);
   const output = item.output;
+  // Every file the job made. The size beside the name is all of them, or a
+  // split of a 10 MB document would read as 400 KB because only its first
+  // page was counted.
+  const fileCount = output ? outputFiles(output).length : 0;
+  const producedBytes = output ? outputBytes(item) : 0;
 
   return (
     <li className="border-shell-200 dark:border-shell-700 rounded border">
@@ -53,15 +60,18 @@ export function QueueRow({
               <>
                 {' → '}
                 <span className="text-shell-200 dark:text-shell-100">
-                  {formatBytes(output.bytes.byteLength)}
+                  {fileCount > 1 && `${fileCount} files, `}
+                  {formatBytes(producedBytes)}
                 </span>{' '}
-                <span
-                  className={
-                    output.bytes.byteLength <= item.source.size ? 'text-good-500' : 'text-warn-500'
-                  }
-                >
-                  {formatDelta(item.source.size, output.bytes.byteLength)}
-                </span>
+                {!tool?.hideDelta && (
+                  <span
+                    className={
+                      producedBytes <= item.source.size ? 'text-good-500' : 'text-warn-500'
+                    }
+                  >
+                    {formatDelta(item.source.size, producedBytes)}
+                  </span>
+                )}
               </>
             )}
           </span>
@@ -85,8 +95,18 @@ export function QueueRow({
             <Action onClick={onRequeue}>Retry</Action>
           )}
           {output && (
-            <Action onClick={() => void saveBytes(output.bytes, output.name, output.mime)} primary>
-              Save
+            <Action
+              onClick={() => {
+                setSaveError(null);
+                // A failed write must not vanish into an unhandled rejection:
+                // the row says Done, and the person has no file.
+                saveOutput(output, withExtension(item.source.name, 'zip')).catch((error: unknown) =>
+                  setSaveError(error instanceof Error ? error.message : 'Could not save.'),
+                );
+              }}
+              primary
+            >
+              {fileCount > 1 ? `Save ${fileCount}` : 'Save'}
             </Action>
           )}
           <Action onClick={onRemove} label={`Remove ${item.source.name}`}>
@@ -105,6 +125,7 @@ export function QueueRow({
       )}
 
       {item.error && <p className="text-bad-500 px-3 pb-2 text-xs">{item.error}</p>}
+      {saveError && <p className="text-bad-500 px-3 pb-2 text-xs">{saveError}</p>}
       {output?.note && <p className="text-shell-400 px-3 pb-2 text-xs">{output.note}</p>}
 
       {open && (

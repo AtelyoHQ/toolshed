@@ -38,6 +38,15 @@ describe('resolved build configuration', () => {
     const config = await resolveConfig({ root }, 'serve');
     expect(config.optimizeDeps.include).toEqual(expect.arrayContaining(['libheif-js/wasm-bundle']));
   }, 60_000);
+
+  it('pre-bundles the PDF libraries, which only a worker imports', async () => {
+    // Same scanner blind spot as libheif, and 4 MB of parsing to do while a
+    // job waits if it is left until the first document arrives.
+    const config = await resolveConfig({ root }, 'serve');
+    expect(config.optimizeDeps.include).toEqual(
+      expect.arrayContaining(['comlink', '@cantoo/pdf-lib', 'pdfjs-dist']),
+    );
+  }, 60_000);
 });
 
 /**

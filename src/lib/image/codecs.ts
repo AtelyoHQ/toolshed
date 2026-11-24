@@ -16,6 +16,23 @@ export interface EncodeOptions {
   /** 0..10 for AVIF, where higher is slower and smaller. */
   effort?: number;
   lossless?: boolean;
+  /**
+   * JPEG only. mozjpeg writes progressive scans by default, which are a few
+   * per cent smaller and are what you want on the web. Inside a PDF they are
+   * not: `DCTDecode` is defined over baseline JPEG, and a progressive stream
+   * is outside what a strict consumer — a print workflow, a PDF/A validator —
+   * has agreed to read. The PDF engine therefore asks for baseline for the
+   * JPEGs it writes itself, and pays those few per cent. It does not re-encode
+   * one a person brought it: turning an image into a PDF embeds its scan data
+   * untouched, progressive or not — the EXIF goes first, the pixels do not —
+   * because a generation of quality is a worse thing to spend than strictness.
+   *
+   * `false` means a genuinely baseline file, start-of-frame marker and all,
+   * which takes two settings rather than one: without `baseline` as well,
+   * mozjpeg leaves the quantization tables unclamped and libjpeg writes an
+   * extended-sequential frame instead.
+   */
+  progressive?: boolean;
 }
 
 export class UnsupportedFormatError extends Error {
@@ -134,7 +151,14 @@ export async function encodeImage(
   switch (format) {
     case 'jpeg': {
       const { default: encode } = await import('@jsquash/jpeg/encode');
-      return asBytes(await encode(source, { quality: options.quality }));
+      return asBytes(
+        await encode(source, {
+          quality: options.quality,
+          ...(options.progressive === undefined
+            ? {}
+            : { progressive: options.progressive, baseline: !options.progressive }),
+        }),
+      );
     }
     case 'webp': {
       const { default: encode } = await import('@jsquash/webp/encode');

@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
@@ -54,8 +55,14 @@ const CODECS = [
  * only entry point spawns the worker, so codecs.ts stays behind that boundary
  * however much UI is built on top; the line can go only if something on the
  * main thread ever imports it directly.
+ *
+ * The other three entries are the PDF engine's libraries, and they are here
+ * for the first of those reasons and not the second: they are plain ESM, so a
+ * late discovery would re-optimise without a reload — but they sit behind
+ * `new Worker(new URL('./pdf.worker.ts', import.meta.url))`, which the scanner
+ * does not follow either, and they are 4 MB to pre-bundle while a job waits.
  */
-const PREBUNDLE = ['libheif-js/wasm-bundle'];
+const PREBUNDLE = ['libheif-js/wasm-bundle', 'comlink', '@cantoo/pdf-lib', 'pdfjs-dist'];
 
 /**
  * Serves the privacy statement from the built site, as a page.
@@ -141,6 +148,44 @@ a {
   };
 }
 
+/**
+ * pdf.js loads its wasm modules and its standard fonts from base URLs it
+ * appends file names to, so those assets have to keep their names and stay
+ * side by side. Everything else is content-hashed as usual.
+ *
+ * The cost is that these are not cache-busted by a hash, so the service
+ * worker's expiry is what retires them; they change only when pdfjs-dist is
+ * upgraded. The alternative is pdf.js building a URL out of a base it was
+ * never given, which is ground rule 1 in CONTRIBUTING.md.
+ * `src/lib/pdf/pdfjsAssets.ts` fails loudly if this rule stops applying, and
+ * `scripts/check-bundle.mjs` fails the build.
+ */
+const PDFJS_RUNTIME_ASSET = /pdfjs-dist[\\/](wasm|standard_fonts|cmaps)[\\/][^\\/]+$/;
+
+/**
+ * The directory carries pdfjs-dist's version, because the files in it cannot
+ * carry a hash. Without it a returning visitor can be served last release's
+ * jbig2.wasm — the service worker holds it for 180 days — beside this
+ * release's pdf.js. The version changes, the directory changes, the cache
+ * entry is a different URL.
+ */
+const PDFJS_VERSION: string = (
+  createRequire(import.meta.url)('pdfjs-dist/package.json') as { version: string }
+).version;
+
+/**
+ * Used by both the worker build and the main one. Only the worker emits these
+ * assets today, because the engine is reached through `new Worker(...)` and
+ * nothing else imports it; the main build's copy is there for the day
+ * something on the main thread does, where the same rule has to hold.
+ */
+function pdfjsAwareAssetNames(asset: { originalFileNames?: readonly string[] }): string {
+  const fromPdfjs = asset.originalFileNames?.some((name) => PDFJS_RUNTIME_ASSET.test(name));
+  return fromPdfjs
+    ? `assets/pdfjs-${PDFJS_VERSION}/[name][extname]`
+    : 'assets/[name]-[hash][extname]';
+}
+
 export default defineConfig({
   // Relative, so dist/ runs from any subdirectory. The app routes on the URL
   // hash rather than the path for the same reason: a path route would make
@@ -218,9 +263,45 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'toolshed-wasm',
-              // Content-hashed filenames, so entries are immutable; the cap is
-              // there to stop the cache growing without bound across releases.
-              expiration: { maxEntries: 32, maxAgeSeconds: 60 * 60 * 24 * 180 },
+              // Immutable URLs — the codecs' file names are content-hashed,
+              // and pdf.js's, which this rule also catches, live in a
+              // directory named after their version. Thirteen per release now
+              // that pdf.js's three are here, so the cap holds several
+              // releases; it is there to stop the cache growing without
+              // bound, not to be tight. Evicting jbig2.wasm would mean a
+              // scan rendering blank offline, which compress.ts refuses but
+              // cannot repair.
+              expiration: { maxEntries: 64, maxAgeSeconds: 60 * 60 * 24 * 180 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // pdf.js's standard fonts and character maps, which are .pfb,
+            // .ttf and .bcmap and so match no other rule here (its wasm is
+            // already caught above). Without this they are missing offline,
+            // and a document using Helvetica renders with substituted glyphs
+            // while a CJK one renders blank — in an application whose manifest
+            // promises it works offline.
+            //
+            // Matched without a leading slash, which is not a detail: a
+            // literal "/assets/..." in the shipped service worker is what
+            // scripts/check-subpath.mjs refuses, because addressing an asset
+            // from the domain root breaks a deployment in a subdirectory.
+            urlPattern: ({ url, sameOrigin }) =>
+              sameOrigin && url.pathname.includes('assets/pdfjs-'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'toolshed-pdfjs',
+              // 191 files per pdfjs-dist version — 14 fonts, 168 character
+              // maps and 9 licence notices; the 3 wasm modules are taken by
+              // the rule above — so this holds two versions and retires the
+              // rest.
+              //
+              // The number is not cosmetic: a miss while online just refetches,
+              // but offline it is a CJK document rendering blank — the
+              // failure compress.ts now refuses outright. All of it is
+              // 1.2 MB.
+              expiration: { maxEntries: 400, maxAgeSeconds: 60 * 60 * 24 * 180 },
               cacheableResponse: { statuses: [0, 200] },
             },
           },
@@ -272,11 +353,20 @@ export default defineConfig({
       output: {
         entryFileNames: 'assets/worker-[name]-[hash].js',
         chunkFileNames: 'assets/worker-[name]-[hash].js',
+        // The wasm and the fonts pdf.js needs are imported from inside a
+        // worker, so the rule has to hold for the worker build too.
+        assetFileNames: pdfjsAwareAssetNames,
       },
     },
   },
   build: {
     target: 'es2022',
+    // pdf.js fetches these by name from a directory, so not one of them may
+    // be inlined as a data URI however small it is. Six of the licence
+    // notices are under the 4 KB default and were inlined, which left the
+    // fonts and the wasm shipping without them.
+    assetsInlineLimit: (filePath: string) =>
+      PDFJS_RUNTIME_ASSET.test(filePath) ? false : undefined,
     rollupOptions: {
       output: {
         // The prefixes are load-bearing: the service worker precaches
@@ -284,7 +374,7 @@ export default defineConfig({
         // cannot creep into the first visit by being renamed.
         entryFileNames: 'assets/entry-[name]-[hash].js',
         chunkFileNames: 'assets/chunk-[name]-[hash].js',
-        assetFileNames: 'assets/[name]-[hash][extname]',
+        assetFileNames: pdfjsAwareAssetNames,
       },
     },
     // Maps are emitted but not linked from the bundle: debuggable when you

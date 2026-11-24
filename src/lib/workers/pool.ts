@@ -53,7 +53,12 @@ type Task<Api, R> = {
   signal?: AbortSignal;
 };
 
-function defaultSize(): number {
+/**
+ * Workers for a pool that does not ask for a size: one per core less one, up
+ * to four. Exported so a pool with a lower ceiling of its own can take the
+ * smaller of the two rather than restate this.
+ */
+export function defaultPoolSize(): number {
   const cores =
     typeof navigator !== 'undefined' && navigator.hardwareConcurrency
       ? navigator.hardwareConcurrency
@@ -82,7 +87,7 @@ export class WorkerPool<Api> {
   private get maxSize(): number {
     // Floored at 1: a size of 0 would leave acquire() returning null for ever
     // with nothing in flight to wake the wait list, hanging the whole queue.
-    return Math.max(1, Math.floor(this.options.size ?? defaultSize()));
+    return Math.max(1, Math.floor(this.options.size ?? defaultPoolSize()));
   }
 
   /** How many workers are currently alive. Exposed for tests. */

@@ -20,6 +20,46 @@ sends your files anywhere.
 | [Comlink](https://github.com/GoogleChromeLabs/comlink)                                                                                                                                                        | Apache-2.0                   | Talking to Web Workers                                  |
 | [Tailwind CSS](https://tailwindcss.com)                                                                                                                                                                       | MIT                          | Styling                                                 |
 
+## A note on the files pdf.js loads at runtime
+
+pdf.js carries WebAssembly modules of its own, each with its own upstream
+licence, listed in `node_modules/pdfjs-dist/wasm/`: Apache-2.0, BSD-style and
+MIT. Three of them ship here — openjpeg (JPEG 2000 images), jbig2 (JBIG2 and
+CCITT scans) and qcms (ICC colour profiles). The fourth, quickjs, runs scripted
+forms from a sandbox this project never loads, so it is not bundled.
+
+It also carries the fourteen standard PDF typefaces, which documents do not
+embed because every reader is required to have them: the Foxit fonts
+(`LICENSE_FOXIT`, a BSD-style notice) and **Liberation Sans 1.07**, which is
+the GNU General Public License v2 with font exceptions, not the Open Font
+License — pdfjs-dist ships the 1.x fonts, and the OFL applies only from
+Liberation 2.0. Both notices ship beside the fonts in
+`assets/pdfjs-<version>/`, which is what each of those licences asks of a
+redistribution.
+
+Toolshed never embeds Liberation Sans in a document it produces. pdf.js uses
+it to draw pages onto a canvas, and the Helvetica that watermarks and page
+numbers are drawn with is one of the fourteen fonts a reader must already
+have, so pdf-lib writes its name and nothing else: no bytes, no widths, no
+descriptor. The metrics are used to place the text and then discarded. The
+licence's embedding exception is a backstop here rather than the thing being
+relied on. What does apply is the rest of it: the fonts ship unmodified,
+alongside their licence, and are reached only through pdf.js.
+
+It also carries the predefined character maps — 168 small files under Adobe's
+three-clause BSD notice, which ships beside them as `LICENSE` — and a document
+with a CJK font needs them before pdf.js will draw or extract a word of it.
+
+Toolshed ships all of these as separate files, loaded on demand. That is not
+only tidiness: pdf.js resolves them at runtime from base URLs it is given,
+those bases have no default, and left alone it requests paths built out of the
+string "null" while the feature silently degrades. A request to a URL this
+build never chose is how ground rule 1 — nothing leaves the browser — stops
+being enforceable, so they are bundled and pdf.js is pointed at them
+explicitly. The directory name carries pdfjs-dist's version
+because the files inside it cannot carry a content hash and are cached for
+months. See `src/lib/pdf/pdfjsAssets.ts`.
+
 ## A note on libheif and the LGPL
 
 HEIC decoding uses libheif, which is licensed under the LGPL-3.0 rather than a

@@ -6,7 +6,7 @@
  * `dist/` contains no WebAssembly at all and an offline test against it would
  * have nothing to assert — the same reason scripts/check-bundle.mjs builds a
  * probe entry of its own. The service worker under test is generated from the
- * project's real vite.config.ts, so its precache list and its two
+ * project's real vite.config.ts, so its precache list and its
  * runtime-caching rules are the ones that ship; the only difference from the
  * app is which modules this page imports. When the interface lands and the
  * built app loads a codec by itself, that test should move onto the real page

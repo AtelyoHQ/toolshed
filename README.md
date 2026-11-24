@@ -23,18 +23,18 @@ medical report — which is exactly what people put through these tools.
 The browser can do all of this work on its own now. Toolshed is what you get
 when you assume that from the start:
 
-| | Hosted tools | Toolshed |
-|---|---|---|
-| Where your file goes | their servers | nowhere |
-| File size limit | 25–100 MB typical | your RAM |
-| Tasks per day | 2–3 free, then pay | unlimited |
-| Account | usually required | none |
-| Works on a plane | no | yes, it installs and runs offline |
-| Price | freemium | free, MIT licensed |
+|                      | Hosted tools       | Toolshed                          |
+| -------------------- | ------------------ | --------------------------------- |
+| Where your file goes | their servers      | nowhere                           |
+| File size limit      | 25–100 MB typical  | your RAM                          |
+| Tasks per day        | 2–3 free, then pay | unlimited                         |
+| Account              | usually required   | none                              |
+| Works on a plane     | no                 | yes, it installs and runs offline |
+| Price                | freemium           | free, MIT licensed                |
 
 ## What it does
 
-**Images** — compress (including *compress to an exact target size*, for the
+**Images** — compress (including _compress to an exact target size_, for the
 forms that demand "under 200 KB"), convert between JPEG, PNG, WebP and AVIF,
 decode HEIC from iPhones, resize, crop, rotate, and strip EXIF/GPS metadata.
 
@@ -45,18 +45,55 @@ watermark or page numbers, and set or remove a password.
 **Batch** — queue many files at once, give each its own settings, and download
 the results individually or as a single zip.
 
+## How offline works
+
+The application shell is precached on first visit, so Toolshed opens with the
+network off straight away. The WebAssembly codecs are a different matter: taken
+together they are more than ten megabytes, and someone who came to rotate one
+JPEG should not pay for the AVIF encoder on mobile data. So each codec is
+cached the first time a tool actually uses it, and that tool works offline from
+then on.
+
+In short: the app is always available offline; a given tool is available
+offline once you have used it once.
+
+Toolshed will keep its state in the URL hash rather than the path, so that the
+whole thing can be served from any subdirectory — a path-based route would
+make the app's relative asset URLs resolve against the route and 404 on a deep
+link. `npm run check:subpath` serves `dist/` from a nested directory, fetches
+every asset `index.html` references, and scans the built scripts for absolute
+asset paths. It runs in CI.
+
 ## Verifying the privacy claim
 
 Do not take the word of a README for this. Open DevTools, go to the Network
 tab, process a file, and watch: there are no requests. For a stronger check,
 load the page, turn off your network adapter entirely, and keep working.
 
-The app also ships a network guard that counts any `fetch`, `XMLHttpRequest`,
-`WebSocket` or `sendBeacon` attempt made after load and shows the count in the
-header. It should read zero, always.
-
 There is no analytics, no telemetry, no error reporting and no font or script
-loaded from a CDN.
+loaded from a CDN. Three separate things hold that, in descending order of how
+much they are worth:
+
+1. **A Content-Security-Policy**: `default-src 'self'`, `connect-src 'self'`.
+   This is enforcement rather than intention — it holds against code nobody
+   here reviewed, including a dependency compromised after this was written.
+   It ships both as a `<meta>` tag and as real response headers
+   (`public/_headers`, `vercel.json`), because **a meta tag does not apply to
+   Web Workers**, and the workers are where your files are processed. A host
+   that cannot send headers, such as GitHub Pages, leaves that gap;
+   [PRIVACY.md](PRIVACY.md) spells out exactly what it costs.
+2. **An end-to-end test** that loads the real built app and fails if a single
+   request goes anywhere else. This is the check that catches a CDN font added
+   to the HTML or the stylesheet, which no JavaScript linter would see.
+3. **Lint rules** that reject `fetch`, `XMLHttpRequest`, `WebSocket`,
+   `EventSource`, `navigator.sendBeacon` and remote dynamic imports outside the
+   network guard. A first line of defence, not the guarantee: it stops the
+   accident, not the determined.
+
+The interface will also show a live count of requests attempted since the page
+loaded, so you can watch it stay at zero while you work.
+
+[PRIVACY.md](PRIVACY.md) states all of this plainly, including the gaps.
 
 ## Running it yourself
 
@@ -65,15 +102,23 @@ npm install
 npm run dev
 ```
 
-Build a static bundle you can host anywhere, including a USB stick:
+Build a static bundle you can host anywhere:
 
 ```sh
 npm run build        # outputs ./dist
 npm run preview
 ```
 
-`dist/` has no backend requirements at all — any static host or `file://`-style
-local server will serve it.
+`dist/` has no backend requirements at all: any static host will serve it,
+including from a subdirectory. It does need to be _served_, though — opening
+`dist/index.html` by double-clicking it will not work, because a module script
+and a service worker both need a real origin. Any one-line static server does
+the job.
+
+If your host can send response headers, point it at `public/_headers`
+(Netlify, Cloudflare Pages) or `vercel.json` (Vercel). That is what extends the
+Content-Security-Policy to the Web Workers where files are processed; see
+[PRIVACY.md](PRIVACY.md).
 
 ## Development
 
@@ -82,6 +127,8 @@ npm run typecheck    # tsc project references, no emit
 npm run lint         # eslint
 npm run test         # vitest unit tests for the engines
 npm run test:e2e     # playwright, builds and drives the real app
+npm run check:subpath # serves dist/ from a nested directory
+npm run check:icons   # the committed icons still match their generator
 npm run format       # prettier
 ```
 

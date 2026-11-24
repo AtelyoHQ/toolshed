@@ -1,0 +1,12 @@
+# Netlify and Cloudflare Pages read this file from the deployed directory.
+#
+# The policy must be sent on EVERY response, not just the document. A dedicated
+# worker takes its CSP from its own script's HTTP response, so a document-only
+# header leaves the workers — which is where every byte of user data is
+# actually processed — with no egress control at all.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' blob:; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Cross-Origin-Opener-Policy: same-origin
+  Permissions-Policy: geolocation=(), camera=(), microphone=(), usb=(), payment=(), interest-cohort=()

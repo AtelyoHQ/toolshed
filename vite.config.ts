@@ -225,12 +225,40 @@ function emitLicenceNotices(): Plugin {
   };
 }
 
+/**
+ * Lets the dev server's own stylesheet through, and only there.
+ *
+ * The policy in index.html says `style-src 'self'`, which is what we want in
+ * production. But `vite dev` injects every stylesheet as an inline <style>
+ * element, so under that policy the browser drops all of them and
+ * `npm run dev` serves an unstyled page — no layout, and controls meant to
+ * be visually hidden showing up as raw form widgets.
+ *
+ * It went unnoticed because nothing tests the dev server's appearance: the
+ * app end-to-end suite runs against the built bundle, where the stylesheet
+ * is a real file and the strict policy is correct.
+ *
+ * `apply: 'serve'` is what keeps this out of the build. The unit test on the
+ * three shipped copies of the policy reads index.html from source, so it
+ * still holds the strict one.
+ */
+function allowDevServerStyles(): Plugin {
+  return {
+    name: 'toolshed:dev-server-styles',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      return html.replace("style-src 'self';", "style-src 'self' 'unsafe-inline';");
+    },
+  };
+}
+
 export default defineConfig({
   // Relative, so dist/ runs from any subdirectory. The app routes on the URL
   // hash rather than the path for the same reason: a path route would make
   // './assets/...' resolve against the route and 404 on a deep link.
   base: './',
   plugins: [
+    allowDevServerStyles(),
     emitPrivacyStatement(),
     emitLicenceNotices(),
     react(),

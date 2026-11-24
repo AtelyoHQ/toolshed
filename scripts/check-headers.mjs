@@ -118,6 +118,8 @@ for (const [label, url] of [
 // whose long lines scroll sideways on a phone.
 await page.goto(`${origin}/privacy.html`, { waitUntil: 'networkidle' });
 const wrapping = await page.evaluate(
+  // Runs in the page, not in Node, so these globals exist there.
+  // eslint-disable-next-line no-undef
   () => getComputedStyle(document.querySelector('pre')).whiteSpace,
 );
 if (wrapping === 'pre-wrap') console.log('ok   the privacy page is styled under the real policy');

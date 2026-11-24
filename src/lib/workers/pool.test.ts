@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PoolTerminatedError, WorkerCrashedError, WorkerPool } from './pool';
+import { PoolTerminatedError, TaskAbandonedError, WorkerCrashedError, WorkerPool } from './pool';
 
 interface Api {
   work: (value: number) => Promise<number>;
@@ -424,6 +424,75 @@ describe('WorkerPool when spawning starts failing mid-batch', () => {
     const jobs = [pool.run(async (api) => api.work(1)), pool.run(async (api) => api.work(2))];
     const results = await Promise.allSettled(jobs);
     expect(results.every((r) => r.status === 'rejected')).toBe(true);
+    pool.terminate();
+  });
+});
+
+describe('WorkerPool cancellation', () => {
+  it('drops a queued task without ever giving it a worker', async () => {
+    // Cancelling thirty of forty files used to cost the full batch: each one
+    // still took a worker and ran to the end before its answer was discarded.
+    let started = 0;
+    const { pool } = makePool(
+      () => ({
+        work: async (v) => {
+          started += 1;
+          return v;
+        },
+      }),
+      1,
+    );
+
+    const blocking = pool.run(async (api) => api.work(1));
+    await Promise.resolve();
+
+    const controller = new AbortController();
+    const queued = pool.run(async (api) => api.work(2), controller.signal);
+    controller.abort();
+
+    await expect(queued).rejects.toBeInstanceOf(TaskAbandonedError);
+    expect(await blocking).toBe(1);
+    // Only the first ever reached the worker.
+    expect(started).toBe(1);
+    pool.terminate();
+  });
+
+  it('refuses a task whose signal was already aborted', async () => {
+    const { pool, created } = makePool(() => ({ work: async (v) => v }), 1);
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(pool.run(async (api) => api.work(1), controller.signal)).rejects.toBeInstanceOf(
+      TaskAbandonedError,
+    );
+    expect(created()).toBe(0);
+    pool.terminate();
+  });
+
+  it('lets a started task finish, because a wasm call cannot be interrupted', async () => {
+    const { pool } = makePool(() => ({ work: async (v) => v }), 1);
+    const controller = new AbortController();
+
+    const job = pool.run(async (api) => api.work(5), controller.signal);
+    await Promise.resolve();
+    controller.abort();
+
+    // The queue discards the result by epoch; the pool must not leak the slot
+    // by pretending the worker stopped.
+    expect(await job).toBe(5);
+    expect(await pool.run(async (api) => api.work(6))).toBe(6);
+    pool.terminate();
+  });
+
+  it('does not disturb tasks without a signal', async () => {
+    const { pool } = makePool(() => ({ work: async (v) => v }), 1);
+    const controller = new AbortController();
+    const plain = pool.run(async (api) => api.work(1));
+    const cancellable = pool.run(async (api) => api.work(2), controller.signal);
+    controller.abort();
+
+    expect(await plain).toBe(1);
+    await expect(cancellable).rejects.toBeInstanceOf(TaskAbandonedError);
     pool.terminate();
   });
 });

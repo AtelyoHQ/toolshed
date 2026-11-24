@@ -19,6 +19,11 @@ import { emptyQueue, queueReducer, selectors } from './queue';
 export function useQueue() {
   const [state, dispatch] = useReducer(queueReducer, emptyQueue);
   const dispatched = useRef(new Set<string>());
+  // One controller per dispatched job, so cancelling a file that has not
+  // reached a worker drops it instead of letting it run to completion and
+  // throwing the answer away. Cancelling thirty of forty files otherwise
+  // still costs the whole batch.
+  const running = useRef(new Map<string, AbortController>());
   const latest = useRef(state);
   latest.current = state;
 
@@ -59,6 +64,9 @@ export function useQueue() {
       return;
     }
 
+    const controller = new AbortController();
+    running.current.set(key, controller);
+
     dispatch({ type: 'start', id, at: Date.now(), epoch });
 
     try {
@@ -67,8 +75,11 @@ export function useQueue() {
       const bytes = new Uint8Array(await item.source.file.arrayBuffer());
       const settings = buildSettings(item.settings, tool);
 
-      const result = await processImageInWorker(bytes, settings, (fraction) =>
-        dispatch({ type: 'progress', id, fraction, epoch }),
+      const result = await processImageInWorker(
+        bytes,
+        settings,
+        (fraction) => dispatch({ type: 'progress', id, fraction, epoch }),
+        controller.signal,
       );
 
       dispatch({
@@ -86,13 +97,19 @@ export function useQueue() {
         },
       });
     } catch (error) {
-      dispatch({
-        type: 'fail',
-        id,
-        at: Date.now(),
-        epoch,
-        error: error instanceof Error ? error.message : 'Something went wrong with this file.',
-      });
+      // A job the person cancelled is not a failure, and the reducer has
+      // already marked it cancelled; saying so again would overwrite that.
+      if (!controller.signal.aborted) {
+        dispatch({
+          type: 'fail',
+          id,
+          at: Date.now(),
+          epoch,
+          error: error instanceof Error ? error.message : 'Something went wrong with this file.',
+        });
+      }
+    } finally {
+      running.current.delete(key);
     }
   }, []);
 
@@ -110,7 +127,11 @@ export function useQueue() {
       remove: (id: string) => dispatch({ type: 'remove', id }),
       clear: () => dispatch({ type: 'clear' }),
       clearFinished: () => dispatch({ type: 'clearFinished' }),
-      cancel: (id: string) => dispatch({ type: 'cancel', id, at: Date.now() }),
+      cancel: (id: string) => {
+        const item = latest.current.items.find((candidate) => candidate.id === id);
+        if (item) running.current.get(`${item.id}:${item.epoch}`)?.abort();
+        dispatch({ type: 'cancel', id, at: Date.now() });
+      },
       requeue: (id: string) => dispatch({ type: 'requeue', id }),
       setTool: (id: string, toolId: string) => {
         const tool = toolById(toolId);

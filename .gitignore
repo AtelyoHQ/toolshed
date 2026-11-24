@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-codec-probe/
 dist-ssr/
 coverage/
 .DS_Store
@@ -10,3 +11,6 @@ test-results/
 .env
 .env.*
 *.tsbuildinfo
+
+# Agent worktrees: whole checkouts of this repo, never part of it.
+.claude/

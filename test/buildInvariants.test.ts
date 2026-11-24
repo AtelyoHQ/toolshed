@@ -87,3 +87,31 @@ describe('Content-Security-Policy', () => {
     }
   });
 });
+
+/**
+ * The service worker's precache list is the difference between a 240 KB first
+ * visit and a multi-megabyte one, and a regression there is invisible until
+ * someone opens the site on mobile data.
+ */
+describe('precache configuration', () => {
+  const config = readFileSync(fileURLToPath(new URL('../vite.config.ts', import.meta.url)), 'utf8');
+  const globs = /globPatterns:\s*\[([\s\S]*?)\]/.exec(config)?.[1] ?? '';
+
+  it('precaches the entry bundle and the shell, by name', () => {
+    expect(globs).toContain('index.html');
+    expect(globs).toContain('entry-*.js');
+  });
+
+  it('does not precache every script', () => {
+    // A blanket js glob looks equivalent and is not: a worker chunk is a
+    // script, and libheif inlines 1.4 MB of WebAssembly into one as base64.
+    expect(globs).not.toMatch(/\{[^}]*\bjs\b[^}]*\}/);
+    expect(globs).not.toContain("'**/*.js'");
+  });
+
+  it('does not precache codecs or workers', () => {
+    expect(globs).not.toContain('wasm');
+    expect(globs).not.toContain('worker-');
+    expect(globs).not.toContain('chunk-');
+  });
+});

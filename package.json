@@ -25,12 +25,14 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -b --noEmit",
     "check:subpath": "node scripts/check-subpath.mjs",
-    "check:icons": "node scripts/make-icons.mjs --check"
+    "check:icons": "node scripts/make-icons.mjs --check",
+    "check:bundle": "node scripts/check-bundle.mjs"
   },
   "dependencies": {
     "@cantoo/pdf-lib": "^2.11.1",
     "@jsquash/avif": "^2.1.1",
     "@jsquash/jpeg": "^1.6.0",
+    "@jsquash/oxipng": "^2.3.0",
     "@jsquash/png": "^3.1.1",
     "@jsquash/resize": "^2.1.0",
     "@jsquash/webp": "^1.5.0",

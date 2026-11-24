@@ -97,6 +97,28 @@ export default defineConfig({
       },
     }),
   ],
+  resolve: {
+    alias: [
+      {
+        /**
+         * jSquash picks the multithreaded AVIF encoder whenever the browser
+         * reports WebAssembly threads, and bundles it either way: 3.5 MB of
+         * wasm plus its own worker chunk. Threads need SharedArrayBuffer,
+         * which needs COOP and COEP response headers — which a static host
+         * serving this from a subdirectory generally cannot send, and the
+         * page cannot set for itself.
+         *
+         * Rewriting that one import to the single-threaded encoder is correct
+         * either way: where threads are unavailable this path was taken
+         * anyway, and where they are available it trades some encoding speed
+         * for not shipping a second encoder most deployments cannot use.
+         * scripts/check-bundle.mjs fails the build if it reappears.
+         */
+        find: /avif_enc_mt\.js$/,
+        replacement: 'avif_enc.js',
+      },
+    ],
+  },
   optimizeDeps: { exclude: CODECS },
   worker: {
     format: 'es',

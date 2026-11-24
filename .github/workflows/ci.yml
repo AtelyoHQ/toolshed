@@ -39,6 +39,12 @@ jobs:
       - name: Bundle resolves when served from a subdirectory
         run: npm run check:subpath
 
+      # What got emitted and what got linked, which the source cannot show:
+      # no threaded AVIF encoder, no third-party origins, no heavy chunks in
+      # the precache.
+      - name: Bundle contains what it should and nothing else
+        run: npm run check:bundle
+
   e2e:
     runs-on: ubuntu-latest
     steps:

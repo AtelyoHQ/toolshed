@@ -60,3 +60,42 @@ test('keeps working with the network switched off', async ({ page, context }) =>
     await context.setOffline(false);
   }
 });
+
+test('blocks a request to another origin at runtime', async ({ page }) => {
+  // Issue #2's acceptance criterion, and the only check that exercises the
+  // guard against real browser globals rather than a stub. The unit tests
+  // install it over a fake scope object; this proves the production bundle
+  // actually patches window.fetch before anything can use it.
+  await page.goto('/');
+
+  const outcome = await page.evaluate(async () => {
+    try {
+      await fetch('https://tracker.example.com/collect');
+      return 'allowed';
+    } catch (error) {
+      return (error as Error).name;
+    }
+  });
+  expect(outcome).toBe('ExternalRequestBlocked');
+});
+
+test('does not mistake a lookalike hostname for this origin', async ({ page }) => {
+  // A string-prefix origin check says yes to this; the real host is not ours.
+  // Note what this proves and what it does not: the preview origin carries a
+  // port, so `localhost:4173.evil.example` is not a parseable URL and the
+  // block comes from the "unparseable counts as external" rule rather than
+  // from comparing hosts. The host comparison itself is covered by the unit
+  // tests, which use a port-free origin.
+  await page.goto('/');
+
+  const outcome = await page.evaluate(async () => {
+    const lookalike = `${location.origin}.evil.example/collect`;
+    try {
+      await fetch(lookalike);
+      return 'allowed';
+    } catch (error) {
+      return (error as Error).name;
+    }
+  });
+  expect(outcome).toBe('ExternalRequestBlocked');
+});

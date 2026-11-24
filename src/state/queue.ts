@@ -1,4 +1,5 @@
-import type { JobOutput, QueueItem, SourceFile, ToolSettings } from '../lib/types';
+import { openPasswordKey } from '../lib/pdfTools';
+import type { FileKind, JobOutput, QueueItem, SourceFile, ToolSettings } from '../lib/types';
 
 export interface QueueState {
   items: QueueItem[];
@@ -18,6 +19,20 @@ export const emptyQueue: QueueState = { items: [], order: [], nextEpoch: 0 };
 export type QueueAction =
   | { type: 'add'; sources: SourceFile[]; toolId: string; settings: ToolSettings }
   | { type: 'remove'; id: string }
+  | {
+      type: 'combine';
+      toolId: string;
+      /** What the parts are, so the row's stand-in source reads as the right kind. */
+      kind: FileKind;
+      settings: ToolSettings;
+      /** Files to add. */
+      sources: SourceFile[];
+      /** Waiting rows to fold in, in the order the queue shows them. */
+      absorb: string[];
+      outputName: string;
+    }
+  | { type: 'moveSource'; id: string; sourceId: string; by: -1 | 1 }
+  | { type: 'removeSource'; id: string; sourceId: string }
   | { type: 'clear' }
   | { type: 'clearFinished' }
   | { type: 'setTool'; id: string; toolId: string; settings: ToolSettings }
@@ -26,7 +41,14 @@ export type QueueAction =
   | { type: 'start'; id: string; at: number; epoch: number }
   | { type: 'progress'; id: string; fraction: number; epoch: number }
   | { type: 'succeed'; id: string; output: JobOutput; at: number; epoch: number }
-  | { type: 'fail'; id: string; error: string; at: number; epoch: number }
+  | {
+      type: 'fail';
+      id: string;
+      error: string;
+      at: number;
+      epoch: number;
+      needsPassword?: 'missing' | 'wrong';
+    }
   | { type: 'requeue'; id: string }
   | { type: 'cancel'; id: string; at: number };
 
@@ -36,6 +58,9 @@ const PENDING = {
   progress: null,
   output: undefined,
   error: undefined,
+  // A password prompt belongs to the attempt that asked for it. Kept through
+  // a settings change it would sit above a row that is about to run again.
+  needsPassword: undefined,
   startedAt: undefined,
   finishedAt: undefined,
 } satisfies Partial<QueueItem>;
@@ -68,6 +93,43 @@ function applySettings(item: QueueItem, settings: ToolSettings, epoch: number): 
   // epoch stranded it: its in-flight result is dropped on arrival and no
   // action ever moved it on, so the row span for ever.
   return { ...next, ...PENDING };
+}
+
+/**
+ * The stand-in source of a row that owns several files.
+ *
+ * Its size is what the totals and the saving are measured against, so it is
+ * recomputed whenever the parts change and never stored twice.
+ */
+function standIn(
+  id: string,
+  name: string,
+  kind: FileKind,
+  parts: readonly SourceFile[],
+): SourceFile {
+  return {
+    id,
+    name,
+    size: parts.reduce((sum, part) => sum + part.size, 0),
+    type: kind === 'pdf' ? 'application/pdf' : '',
+    kind,
+    file: new File([], name),
+  };
+}
+
+/**
+ * A row's files changed. Same rule as changing its settings: whatever the old
+ * files produced no longer describes the row, a result in flight for them is
+ * discarded, and a cancelled row stays cancelled.
+ */
+function withParts(item: QueueItem, parts: SourceFile[], epoch: number): QueueItem {
+  const next: QueueItem = {
+    ...item,
+    parts,
+    source: standIn(item.source.id, item.source.name, item.source.kind, parts),
+    epoch,
+  };
+  return item.status === 'cancelled' ? next : { ...next, ...PENDING };
 }
 
 /**
@@ -137,6 +199,92 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
         order: state.order.filter((id) => id !== action.id),
       };
 
+    case 'combine': {
+      const gone = new Set(action.absorb);
+      const absorbed = state.items.filter(
+        // Only rows that have not started: folding in a finished one would
+        // throw away a result that may not have been saved.
+        (item) => gone.has(item.id) && !item.parts && item.status === 'queued',
+      );
+      // A row still waiting, or one that failed and is about to be tried
+      // again, is added to rather than duplicated, so that dropping files one
+      // gesture at a time still makes one merge. A finished one is left alone:
+      // its result may not have been saved.
+      const target = state.items.find(
+        (item) =>
+          item.toolId === action.toolId &&
+          item.parts &&
+          (item.status === 'queued' || item.status === 'error'),
+      );
+
+      const seen = new Set(target?.parts?.map((part) => part.id));
+      const fresh = [...absorbed.map((item) => item.source), ...action.sources].filter((source) => {
+        if (seen.has(source.id)) return false;
+        seen.add(source.id);
+        return true;
+      });
+      if (fresh.length === 0) return state;
+
+      // Each folded-in file takes the password it was already given with it.
+      const passwords: ToolSettings = {};
+      for (const item of absorbed) {
+        const typed = item.settings[openPasswordKey()];
+        if (typeof typed === 'string' && typed !== '') {
+          passwords[openPasswordKey(item.source.id)] = typed;
+        }
+      }
+
+      const absorbedIds = new Set(absorbed.map((item) => item.id));
+      const epoch = state.nextEpoch;
+      const kept = state.items.filter((item) => !absorbedIds.has(item.id));
+      const keptOrder = state.order.filter((id) => !absorbedIds.has(id));
+
+      if (target?.parts) {
+        const items = kept.map((item) =>
+          item.id === target.id
+            ? {
+                ...withParts(item, [...(target.parts ?? []), ...fresh], epoch),
+                settings: { ...item.settings, ...passwords },
+              }
+            : item,
+        );
+        return { items, order: keptOrder, nextEpoch: epoch + 1 };
+      }
+
+      const id = `combined:${action.toolId}:${epoch}`;
+      const row: QueueItem = {
+        id,
+        source: standIn(id, action.outputName, action.kind, fresh),
+        parts: fresh,
+        toolId: action.toolId,
+        settings: { ...action.settings, ...passwords },
+        status: 'queued',
+        progress: null,
+        epoch,
+      };
+      return { items: [...kept, row], order: [...keptOrder, id], nextEpoch: epoch + 1 };
+    }
+
+    case 'moveSource':
+      return invalidate(state, action.id, (item, epoch) => {
+        const parts = item.parts;
+        const from = parts?.findIndex((part) => part.id === action.sourceId) ?? -1;
+        const to = from + action.by;
+        if (!parts || from === -1 || to < 0 || to >= parts.length) return item;
+        const moved = [...parts];
+        [moved[from], moved[to]] = [moved[to] as SourceFile, moved[from] as SourceFile];
+        return withParts(item, moved, epoch);
+      });
+
+    case 'removeSource': {
+      const item = state.items.find((candidate) => candidate.id === action.id);
+      const remaining = item?.parts?.filter((part) => part.id !== action.sourceId);
+      if (!item?.parts || !remaining || remaining.length === item.parts.length) return state;
+      // The last file going leaves a row with nothing to run.
+      if (remaining.length === 0) return queueReducer(state, { type: 'remove', id: action.id });
+      return invalidate(state, action.id, (current, epoch) => withParts(current, remaining, epoch));
+    }
+
     case 'clear':
       // nextEpoch survives, so a file cleared and dropped again cannot be
       // given an epoch a worker is still carrying.
@@ -155,7 +303,9 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
 
     case 'setTool':
       return invalidate(state, action.id, (item, epoch) =>
-        item.toolId === action.toolId
+        // A row of several files belongs to its tool: they were gathered for
+        // it, and no other tool would know what to do with them.
+        item.toolId === action.toolId || item.parts
           ? item
           : {
               ...item,
@@ -200,6 +350,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
           status: 'running',
           progress: 0,
           error: undefined,
+          needsPassword: undefined,
           output: undefined,
           startedAt: action.at,
           finishedAt: undefined,
@@ -245,6 +396,7 @@ export function queueReducer(state: QueueState, action: QueueAction): QueueState
           progress: null,
           output: undefined,
           error: action.error,
+          needsPassword: action.needsPassword,
           startedAt: item.startedAt ?? action.at,
           finishedAt: action.at,
         };

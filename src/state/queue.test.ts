@@ -540,3 +540,253 @@ describe('the epoch counter itself', () => {
     expect(state.order).not.toBe(emptyQueue.order);
   });
 });
+
+function pdf(id: string, size = 1000): SourceFile {
+  return {
+    id,
+    name: `${id}.pdf`,
+    size,
+    type: 'application/pdf',
+    kind: 'pdf',
+    file: new File([new Uint8Array(size)], `${id}.pdf`, { type: 'application/pdf' }),
+  };
+}
+
+const COMBINE = {
+  type: 'combine',
+  toolId: 'pdf-merge',
+  kind: 'pdf',
+  settings: {},
+  absorb: [] as string[],
+  outputName: 'merged.pdf',
+} as const;
+
+function merged(...ids: string[]): QueueState {
+  return queueReducer(emptyQueue, { ...COMBINE, sources: ids.map((id) => pdf(id)) });
+}
+
+const first = (state: QueueState) => state.items[0] as QueueState['items'][number];
+
+describe('rows that own several files', () => {
+  it('makes one row from many files, sized as all of them together', () => {
+    const state = queueReducer(emptyQueue, {
+      ...COMBINE,
+      sources: [pdf('a', 300), pdf('b', 700)],
+    });
+    expect(state.items).toHaveLength(1);
+    expect(first(state).parts?.map((part) => part.id)).toEqual(['a', 'b']);
+    // The saving is measured against this, so it has to be every input.
+    expect(first(state).source.size).toBe(1000);
+    expect(first(state).source.name).toBe('merged.pdf');
+    expect(state.order).toEqual([first(state).id]);
+  });
+
+  it('adds later drops to the row that has not run, rather than starting a second', () => {
+    let state = merged('a');
+    const before = first(state);
+    state = queueReducer(state, { ...COMBINE, sources: [pdf('b'), pdf('a')] });
+
+    expect(state.items).toHaveLength(1);
+    // The duplicate is ignored, as it is for ordinary rows.
+    expect(first(state).parts?.map((part) => part.id)).toEqual(['a', 'b']);
+    expect(first(state).epoch).not.toBe(before.epoch);
+  });
+
+  it('changes nothing when every file offered is already there', () => {
+    const state = merged('a', 'b');
+    expect(queueReducer(state, { ...COMBINE, sources: [pdf('a')] })).toBe(state);
+  });
+
+  it('starts a second row rather than reopening a finished one', () => {
+    let state = merged('a', 'b');
+    const id = first(state).id;
+    const epoch = first(state).epoch;
+    state = queueReducer(state, { type: 'start', id, at: 1, epoch });
+    state = queueReducer(state, { type: 'succeed', id, at: 2, epoch, output });
+
+    state = queueReducer(state, { ...COMBINE, sources: [pdf('c')] });
+
+    expect(state.items).toHaveLength(2);
+    // The finished row still has the result nobody may have saved.
+    expect(state.items[0]?.output).toBe(output);
+    expect(state.items[1]?.parts?.map((part) => part.id)).toEqual(['c']);
+  });
+
+  it('lets a failed row take another file and try again', () => {
+    let state = merged('a', 'b');
+    const { id, epoch } = first(state);
+    state = queueReducer(state, { type: 'fail', id, at: 1, epoch, error: 'nope' });
+    state = queueReducer(state, { ...COMBINE, sources: [pdf('c')] });
+
+    expect(state.items).toHaveLength(1);
+    expect(first(state).status).toBe('queued');
+    expect(first(state).error).toBeUndefined();
+  });
+
+  it('folds waiting rows in, in queue order, and takes them out of the queue', () => {
+    let state = queueReducer(emptyQueue, {
+      type: 'add',
+      sources: [pdf('a'), pdf('b'), pdf('c')],
+      toolId: 'pdf-compress',
+      settings: {},
+    });
+    state = queueReducer(state, { ...COMBINE, sources: [], absorb: ['a', 'c'] });
+
+    expect(state.order).toHaveLength(2);
+    expect(state.items.find((item) => item.id === 'b')).toBeDefined();
+    const row = state.items.find((item) => item.parts);
+    expect(row?.parts?.map((part) => part.id)).toEqual(['a', 'c']);
+  });
+
+  it('does not fold in a row that has already produced something', () => {
+    let state = queueReducer(emptyQueue, {
+      type: 'add',
+      sources: [pdf('a'), pdf('b')],
+      toolId: 'pdf-compress',
+      settings: {},
+    });
+    const epoch = state.items[0]?.epoch as number;
+    state = queueReducer(state, { type: 'start', id: 'a', at: 1, epoch });
+    state = queueReducer(state, { type: 'succeed', id: 'a', at: 2, epoch, output });
+
+    state = queueReducer(state, { ...COMBINE, sources: [], absorb: ['a', 'b'] });
+
+    expect(state.items.find((item) => item.id === 'a')?.status).toBe('done');
+    expect(state.items.find((item) => item.parts)?.parts?.map((part) => part.id)).toEqual(['b']);
+  });
+
+  it('keeps the password a folded-in file was given, against that file only', () => {
+    let state = queueReducer(emptyQueue, {
+      type: 'add',
+      sources: [pdf('a'), pdf('b')],
+      toolId: 'pdf-compress',
+      settings: {},
+    });
+    state = queueReducer(state, {
+      type: 'patchSettings',
+      id: 'a',
+      settings: { openPassword: 'open sesame' },
+    });
+    state = queueReducer(state, { ...COMBINE, sources: [], absorb: ['a', 'b'] });
+
+    const settings = first(state).settings;
+    expect(settings['openPassword:a']).toBe('open sesame');
+    expect(settings['openPassword:b']).toBeUndefined();
+    expect(settings.openPassword).toBeUndefined();
+  });
+
+  it('reorders the files, and what was produced from the old order no longer stands', () => {
+    let state = merged('a', 'b', 'c');
+    const { id, epoch } = first(state);
+    state = queueReducer(state, { type: 'start', id, at: 1, epoch });
+    state = queueReducer(state, { type: 'succeed', id, at: 2, epoch, output });
+
+    state = queueReducer(state, { type: 'moveSource', id, sourceId: 'c', by: -1 });
+
+    expect(first(state).parts?.map((part) => part.id)).toEqual(['a', 'c', 'b']);
+    expect(first(state).status).toBe('queued');
+    expect(first(state).output).toBeUndefined();
+  });
+
+  it('discards a merge that finishes after the files were reordered', () => {
+    // The epoch contract, for the one kind of row whose input is a list.
+    let state = merged('a', 'b');
+    const { id, epoch } = first(state);
+    state = queueReducer(state, { type: 'start', id, at: 1, epoch });
+    state = queueReducer(state, { type: 'moveSource', id, sourceId: 'b', by: -1 });
+    state = queueReducer(state, { type: 'succeed', id, at: 2, epoch, output });
+
+    expect(first(state).status).toBe('queued');
+    expect(first(state).output).toBeUndefined();
+  });
+
+  it('spends no epoch on a move that goes nowhere', () => {
+    const state = merged('a', 'b');
+    const { id } = first(state);
+    expect(queueReducer(state, { type: 'moveSource', id, sourceId: 'a', by: -1 })).toBe(state);
+    expect(queueReducer(state, { type: 'moveSource', id, sourceId: 'b', by: 1 })).toBe(state);
+    expect(queueReducer(state, { type: 'moveSource', id, sourceId: 'zzz', by: 1 })).toBe(state);
+  });
+
+  it('keeps a cancelled row cancelled when its files change', () => {
+    let state = merged('a', 'b');
+    const { id } = first(state);
+    state = queueReducer(state, { type: 'cancel', id, at: 1 });
+    state = queueReducer(state, { type: 'moveSource', id, sourceId: 'b', by: -1 });
+    expect(first(state).status).toBe('cancelled');
+  });
+
+  it('shrinks the row when a file is taken out, and drops the row when none are left', () => {
+    let state = queueReducer(emptyQueue, {
+      ...COMBINE,
+      sources: [pdf('a', 100), pdf('b', 200)],
+    });
+    const { id } = first(state);
+
+    state = queueReducer(state, { type: 'removeSource', id, sourceId: 'a' });
+    expect(first(state).source.size).toBe(200);
+    expect(first(state).parts?.map((part) => part.id)).toEqual(['b']);
+
+    state = queueReducer(state, { type: 'removeSource', id, sourceId: 'b' });
+    expect(state.items).toHaveLength(0);
+    expect(state.order).toHaveLength(0);
+  });
+
+  it('ignores a request to take out a file the row does not have', () => {
+    const state = merged('a', 'b');
+    expect(
+      queueReducer(state, { type: 'removeSource', id: first(state).id, sourceId: 'zzz' }),
+    ).toBe(state);
+  });
+
+  it('will not hand its files to a tool that cannot use them', () => {
+    const state = merged('a', 'b');
+    const next = queueReducer(state, {
+      type: 'setTool',
+      id: first(state).id,
+      toolId: 'pdf-compress',
+      settings: {},
+    });
+    expect(next).toBe(state);
+  });
+});
+
+describe('a password the job asked for', () => {
+  const locked = (): QueueState => {
+    const state = withItems('a');
+    const epoch = state.items[0]?.epoch as number;
+    return queueReducer(state, {
+      type: 'fail',
+      id: 'a',
+      at: 1,
+      epoch,
+      error: 'needs a password',
+      needsPassword: 'missing',
+    });
+  };
+
+  it('is recorded on the row, so the interface does not read the message to find out', () => {
+    expect(locked().items[0]?.needsPassword).toBe('missing');
+  });
+
+  it('goes away when the row is tried again', () => {
+    const state = queueReducer(locked(), { type: 'requeue', id: 'a' });
+    expect(state.items[0]?.needsPassword).toBeUndefined();
+  });
+
+  it('goes away when the settings change', () => {
+    const state = queueReducer(locked(), {
+      type: 'patchSettings',
+      id: 'a',
+      settings: { openPassword: 'x' },
+    });
+    expect(state.items[0]?.needsPassword).toBeUndefined();
+  });
+
+  it('is not left on a row that failed for another reason', () => {
+    const state = queueReducer(locked(), { type: 'requeue', id: 'a' });
+    const { epoch } = state.items[0] as QueueState['items'][number];
+    const next = queueReducer(state, { type: 'fail', id: 'a', at: 2, epoch, error: 'other' });
+    expect(next.items[0]?.needsPassword).toBeUndefined();
+  });
+});

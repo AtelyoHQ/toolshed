@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-const BASE = 'http://localhost:4173';
+/** Whatever the config settled on, so the suite is not pinned to one port. */
+const BASE = `http://localhost:${process.env.TOOLSHED_PREVIEW_PORT ?? 4173}`;
 
 test('serves the built bundle and renders the shell', async ({ page }) => {
   await page.goto('/');

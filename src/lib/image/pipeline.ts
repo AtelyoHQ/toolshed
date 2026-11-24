@@ -13,6 +13,7 @@ import {
   readDimensions,
   readOrientation,
   stripMetadata,
+  type Orientation,
 } from './metadata';
 import {
   crop,
@@ -56,6 +57,16 @@ export interface ImageSettings {
    */
   neverGrow?: boolean;
   allowUpscale?: boolean;
+  /**
+   * The caller is asking for a re-encode, not merely a clean-up.
+   *
+   * Quality alone cannot say this. "Keep the format, quality 75, strip the
+   * metadata" is indistinguishable from "just strip the metadata" by
+   * inspection, and the fast path below would take the second reading — so
+   * Compress would hand back the input unchanged for every photo that
+   * carries EXIF, which is every photo from a phone.
+   */
+  recompress?: boolean;
 }
 
 export interface ImageCodecs {
@@ -87,8 +98,35 @@ export class UnreadableImageError extends Error {
   }
 }
 
+/**
+ * Whether handing back the input bytes is an honest answer.
+ *
+ * There are two places that want to return the original — the fast path that
+ * skips decoding, and the guard that refuses to ship a bigger file — and
+ * both have to apply the same conditions. Keeping them in one function is
+ * what stops the next one being written with a condition missing.
+ */
+function canReturnOriginal(
+  bytes: Uint8Array,
+  settings: ImageSettings,
+  orientation: Orientation,
+): boolean {
+  // An orientation tag still in the file means the pixels are not upright.
+  // Returning them with the tag stripped leaves a portrait photo on its side.
+  if (orientation !== 1) return false;
+
+  // A multi-picture file hides whole extra images, each with its own EXIF and
+  // GPS, after the primary one. The in-place strip walks only the primary
+  // image's markers, so the location survives in the hidden copy — and the
+  // note would tell the person it had been removed.
+  if (settings.stripMetadata !== false && hasTrailingImages(bytes)) return false;
+
+  return true;
+}
+
 /** True when nothing about the pixels was asked to change. */
 function isPixelPreserving(settings: ImageSettings, source: ImageFormat): boolean {
+  if (settings.recompress) return false;
   return (
     (settings.format === 'keep' || settings.format === source) &&
     settings.targetBytes === undefined &&
@@ -140,7 +178,7 @@ export async function processImage(
   // multi-picture file hides whole extra images, with their own GPS, after
   // the primary one; a marker walk never sees them, so the honest answer
   // there is to re-encode and drop them.
-  if (pixelPreserving && orientation === 1 && !hasTrailingImages(bytes)) {
+  if (pixelPreserving && canReturnOriginal(bytes, settings, orientation)) {
     const stripped = stripMetadata(bytes);
     if (stripped !== bytes) {
       onProgress?.(1);
@@ -167,6 +205,11 @@ export async function processImage(
     if (transform.rotate !== 0) image = rotate(image, transform.rotate);
     if (transform.flip) image = flip(image, transform.flip);
   }
+
+  // Snapshot before any geometry, so the guard below can ask what actually
+  // happened to the pixels rather than what was requested.
+  const sourceWidth = image.width;
+  const sourceHeight = image.height;
 
   if (settings.crop) image = crop(image, settings.crop);
   if (settings.rotate) image = rotate(image, settings.rotate);
@@ -232,9 +275,38 @@ export async function processImage(
   }
   onProgress?.(0.95);
 
+  /**
+   * Whether the pixels in this file are genuinely different from the ones
+   * that came in. Asked of the work that happened, not of the settings that
+   * were requested — the two are not the same thing:
+   *
+   * - Resize always sets `resize`, but never upscales, so for an image
+   *   already under the chosen edge nothing moved. Treating that as a
+   *   geometry change meant Resize shipped a bigger, re-encoded file for
+   *   every small image, with nothing on screen to explain it.
+   * - An EXIF orientation that has been baked into the pixels is a real
+   *   change even though no setting asked for it. Handing back the original
+   *   bytes there returns an unrotated photo with its orientation tag
+   *   deleted, which is a portrait phone photo permanently on its side.
+   *
+   * Rotate and flip are unconditional because a 180 degree turn and a mirror
+   * both keep the dimensions.
+   */
+  const pixelsMoved =
+    Boolean(settings.rotate) ||
+    Boolean(settings.flip) ||
+    image.width !== sourceWidth ||
+    image.height !== sourceHeight;
+
   // Only meaningful when the format did not change: a bigger PNG that the
   // person explicitly asked for is not a failure.
-  if ((settings.neverGrow ?? true) && target === source && output.byteLength >= bytes.byteLength) {
+  if (
+    (settings.neverGrow ?? true) &&
+    !pixelsMoved &&
+    canReturnOriginal(bytes, settings, orientation) &&
+    target === source &&
+    output.byteLength >= bytes.byteLength
+  ) {
     const stripped = settings.stripMetadata === false ? bytes : stripMetadata(bytes);
     onProgress?.(1);
     return {

@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-const BASE = 'http://localhost:4173';
+/** Whatever the config settled on, so the suite is not pinned to one port. */
+const BASE = `http://localhost:${process.env.TOOLSHED_PREVIEW_PORT ?? 4173}`;
 
 test('serves the built bundle and renders the shell', async ({ page }) => {
   await page.goto('/');
@@ -88,11 +89,13 @@ test('offers to install, and takes no for an answer', async ({ page }) => {
   await page.getByRole('button', { name: 'Not now' }).click();
   await expect(offer).toBeHidden();
 
-  // PRIVACY.md promises this one flag is everything the application keeps
-  // outside its own code cache. Nothing else in the repo would notice a
-  // second key appearing beside it.
-  expect(await page.evaluate(() => Object.keys(localStorage))).toEqual([
+  // PRIVACY.md lists exactly what the application keeps outside its own code
+  // cache, and nothing else in the repo would notice a key appearing beside
+  // them. Both of these are preferences the person set; neither identifies
+  // anyone. A new key here means that document needs a new sentence.
+  expect((await page.evaluate(() => Object.keys(localStorage))).sort()).toEqual([
     'toolshed:install-dismissed',
+    'toolshed:theme',
   ]);
 
   // Not even if the browser offers again before the page has been reloaded.

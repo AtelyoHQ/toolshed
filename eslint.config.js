@@ -14,6 +14,7 @@ const NO_NETWORK =
 
 export default tseslint.config(
   {
+    // .claude holds agent worktrees, which are whole copies of this repo.
     ignores: [
       'dist',
       'dist-codec-probe',
@@ -22,6 +23,7 @@ export default tseslint.config(
       'coverage',
       'playwright-report',
       'test-results',
+      '.claude',
     ],
   },
   js.configs.recommended,

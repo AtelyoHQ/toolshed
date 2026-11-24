@@ -75,8 +75,10 @@ Do not take any of the above on trust:
 To work offline, the application stores a copy of its own code in the browser's
 cache. Your files are never put there.
 
-One other thing is stored, in local storage: a single flag recording that you
-waved away the offer to install the app, so that it is not offered again.
+Two other things are stored, in local storage, and both are preferences you
+set yourself: whether you waved away the offer to install the app, so it is
+not offered again, and whether you chose the light or dark theme. Neither is
+an identifier and neither describes a file you opened.
 
 Alongside the cache, the service worker keeps its own bookkeeping in IndexedDB
 — the address and fetch time of each cached file — because the cache is capped

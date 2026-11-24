@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite';
+import { readFile } from 'node:fs/promises';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 import { VitePWA } from 'vite-plugin-pwa';
@@ -19,12 +20,70 @@ const CODECS = [
   '@jsquash/webp',
 ];
 
+/**
+ * Serves the privacy statement from the built site, as a page.
+ *
+ * The footer links to it as the evidence behind "nothing is uploaded", and
+ * Vite only copies `public/`, so there is nothing to link to otherwise. It
+ * is emitted as HTML rather than raw Markdown for two reasons: a .md file is
+ * sent as text/markdown and Chrome downloads it instead of showing it, and a
+ * page can be precached so the statement is readable with the network off
+ * like the rest of the app.
+ *
+ * The text itself still lives in one place, PRIVACY.md at the repo root.
+ */
+function emitPrivacyStatement(): Plugin {
+  return {
+    name: 'toolshed:privacy-statement',
+    async generateBundle() {
+      const text = await readFile(new URL('./PRIVACY.md', import.meta.url), 'utf8');
+      const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+      this.emitFile({
+        type: 'asset',
+        fileName: 'privacy.html',
+        source: `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Privacy — Toolshed</title>
+    <meta name="color-scheme" content="dark light" />
+    <style>
+      :root { color-scheme: dark light; }
+      body {
+        margin: 0 auto;
+        max-width: 46rem;
+        padding: 2.5rem 1.25rem 4rem;
+        background: #0b0f14;
+        color: #e6eaf1;
+        font: 15px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      @media (prefers-color-scheme: light) {
+        body { background: #fff; color: #171d26; }
+      }
+      pre { white-space: pre-wrap; word-wrap: break-word; margin: 0; }
+      a { color: inherit; }
+    </style>
+  </head>
+  <body>
+    <pre>${escaped}</pre>
+    <p><a href="./">Back to Toolshed</a></p>
+  </body>
+</html>
+`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
   // Relative, so dist/ runs from any subdirectory. The app routes on the URL
   // hash rather than the path for the same reason: a path route would make
   // './assets/...' resolve against the route and 404 on a deep link.
   base: './',
   plugins: [
+    emitPrivacyStatement(),
     react(),
     tailwindcss(),
     VitePWA({
@@ -63,11 +122,18 @@ export default defineConfig({
         // rule the build enforces, not a guess about what Rollup will emit.
         globPatterns: [
           'index.html',
+          'privacy.html',
           'registerSW.js',
           'manifest.webmanifest',
           '**/entry-*.js',
           '**/*.{css,svg,png}',
         ],
+        // Without this the service worker answers every top-level request
+        // with the app shell, so the privacy page — and any other page or
+        // file linked from the app — silently serves the application
+        // instead. It fails invisibly: curl and the file on disk both look
+        // right, because neither goes through the service worker.
+        navigateFallbackDenylist: [/\.(?:md|txt|html)$/, /^\/LICENSE$/],
         cleanupOutdatedCaches: true,
         runtimeCaching: [
           {

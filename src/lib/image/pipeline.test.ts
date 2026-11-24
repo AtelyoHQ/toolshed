@@ -191,11 +191,10 @@ describe('processImage', () => {
       encode: async () => new Uint8Array(10_000),
     };
     const original = jpegBytes({ size: 200 });
-    const result = await processImage(
-      original,
-      { ...BASE, rotate: 0, resize: { scale: 1 } },
-      codecs,
-    );
+    // recompress, not a no-op resize: asking for geometry now deliberately
+    // disables this guard, because a rotation must happen even when the
+    // result comes out bigger.
+    const result = await processImage(original, { ...BASE, recompress: true }, codecs);
     expect(result.unchanged).toBe(true);
     expect(result.bytes.byteLength).toBeLessThanOrEqual(original.byteLength);
     expect(result.note).toMatch(/already well compressed/i);
@@ -218,7 +217,7 @@ describe('processImage', () => {
     };
     const result = await processImage(
       jpegBytes({ size: 200 }),
-      { ...BASE, neverGrow: false, resize: { scale: 1 } },
+      { ...BASE, neverGrow: false, recompress: true },
       codecs,
     );
     expect(result.unchanged).toBeUndefined();
@@ -356,5 +355,175 @@ describe('reporting a downscale', () => {
       codecs,
     );
     expect(result.note ?? '').not.toMatch(/resized/i);
+  });
+});
+
+describe('a tool whose job is re-encoding', () => {
+  it('compresses a photo that carries EXIF, instead of only stripping it', async () => {
+    // This is every photo from a phone. Without an explicit re-encode flag,
+    // "keep the format, quality 20, strip the metadata" is indistinguishable
+    // from "just strip the metadata", the fast path wins, and Compress hands
+    // back the input reporting a 0% saving.
+    const codecs = fakeCodecs();
+    const result = await processImage(
+      jpegBytes({ orientation: 1 }),
+      { ...BASE, quality: 20, recompress: true },
+      codecs,
+    );
+
+    expect(codecs.encode).toHaveBeenCalled();
+    expect(result.note ?? '').not.toMatch(/without re-encoding/i);
+  });
+
+  it('leaves the fast path to the tool that only strips metadata', async () => {
+    const codecs = fakeCodecs();
+    await processImage(jpegBytes({ orientation: 1 }), BASE, codecs);
+    expect(codecs.encode).not.toHaveBeenCalled();
+  });
+});
+
+describe('a geometry change is not optional', () => {
+  it('rotates even when the rotated file comes out larger', async () => {
+    // Most images on a disk are already compressed, so a re-encode usually
+    // grows them. A guard written for compression used to swallow the
+    // rotation and report Done on an unrotated file.
+    const codecs: ImageCodecs = {
+      decode: async () => picture(8, 4),
+      encode: async () => new Uint8Array(10_000),
+    };
+    const result = await processImage(
+      jpegBytes({ size: 200 }),
+      { ...BASE, recompress: true, rotate: 90 },
+      codecs,
+    );
+
+    expect(result.unchanged).toBeUndefined();
+    expect([result.width, result.height]).toEqual([4, 8]);
+    expect(result.bytes.byteLength).toBe(10_000);
+  });
+
+  it('does the same for a mirror, a crop and a resize', async () => {
+    const codecs: ImageCodecs = {
+      decode: async () => picture(8, 4),
+      encode: async () => new Uint8Array(10_000),
+    };
+
+    for (const settings of [
+      { flip: 'horizontal' as const },
+      { crop: { x: 0, y: 0, width: 4, height: 2 } },
+      { resize: { longestEdge: 4 } },
+    ]) {
+      const result = await processImage(
+        jpegBytes({ size: 200 }),
+        { ...BASE, recompress: true, ...settings },
+        codecs,
+      );
+      expect(result.unchanged, JSON.stringify(settings)).toBeUndefined();
+    }
+  });
+});
+
+describe('the never-grow guard asks what happened, not what was asked for', () => {
+  const growing: ImageCodecs = {
+    decode: async () => picture(8, 6),
+    encode: async () => new Uint8Array(10_000),
+  };
+
+  it('keeps the original when a resize had nothing to resize', async () => {
+    // Resize always sets `resize`, and it never upscales. For an image
+    // already under the chosen edge nothing moves, so a re-encode would ship
+    // a bigger file at one generation less quality for no reason at all.
+    const result = await processImage(
+      jpegBytes({ size: 200 }),
+      { ...BASE, recompress: true, resize: { longestEdge: 1920 } },
+      growing,
+    );
+
+    expect(result.unchanged).toBe(true);
+    expect(result.bytes.byteLength).toBeLessThan(10_000);
+  });
+
+  it('still re-encodes when the resize actually shrank something', async () => {
+    const result = await processImage(
+      jpegBytes({ size: 200 }),
+      { ...BASE, recompress: true, resize: { longestEdge: 4 } },
+      growing,
+    );
+    expect(result.unchanged).toBeUndefined();
+  });
+
+  it('keeps a baked-in orientation even when the file grew', async () => {
+    // Otherwise the guard hands back the original pixels with the
+    // orientation tag deleted: a portrait phone photo, permanently sideways,
+    // reported as Done.
+    const result = await processImage(
+      jpegBytes({ orientation: 6, size: 200 }),
+      { ...BASE, recompress: true },
+      growing,
+    );
+
+    expect(result.unchanged).toBeUndefined();
+    expect(result.bytes.byteLength).toBe(10_000);
+    // 8x6 decoded, turned a quarter.
+    expect([result.width, result.height]).toEqual([6, 8]);
+  });
+
+  it('does the same for the metadata-only tool on a sideways photo', async () => {
+    const result = await processImage(
+      jpegBytes({ orientation: 8, size: 200 }),
+      { ...BASE, quality: 90 },
+      growing,
+    );
+    expect(result.unchanged).toBeUndefined();
+    expect([result.width, result.height]).toEqual([6, 8]);
+  });
+});
+
+describe('a multi-picture file is never handed back as "metadata removed"', () => {
+  /** Two JPEGs end to end, as Samsung and Apple cameras write them. */
+  function multiPicture(): Uint8Array {
+    const primary = jpegBytes({ orientation: 1, size: 120 });
+    const hidden = jpegBytes({ orientation: 1, size: 120 });
+    const out = new Uint8Array(primary.length + hidden.length);
+    out.set(primary, 0);
+    out.set(hidden, primary.length);
+    return out;
+  }
+
+  const growing: ImageCodecs = {
+    decode: async () => picture(8, 6),
+    encode: async () => new Uint8Array(100_000),
+  };
+
+  it('re-encodes rather than returning bytes that still hide a second image', async () => {
+    // The in-place strip walks only the primary image's markers, so the
+    // appended copy keeps its own EXIF and GPS. Returning it with a note
+    // saying the metadata was removed is the worst outcome this app has:
+    // the person believes their location is gone and ships it anyway.
+    const input = multiPicture();
+    const result = await processImage(input, { ...BASE, quality: 90 }, growing);
+
+    expect(result.unchanged).toBeUndefined();
+    expect(result.bytes.byteLength).toBe(100_000);
+    expect(result.note ?? '').not.toMatch(/removed the metadata/i);
+  });
+
+  it('does the same when compressing', async () => {
+    const result = await processImage(
+      multiPicture(),
+      { ...BASE, recompress: true, quality: 75 },
+      growing,
+    );
+    expect(result.unchanged).toBeUndefined();
+  });
+
+  it('may still return the original when metadata was asked to be kept', async () => {
+    // Nothing is being promised about the hidden image in that case.
+    const result = await processImage(
+      multiPicture(),
+      { ...BASE, recompress: true, stripMetadata: false },
+      growing,
+    );
+    expect(result.unchanged).toBe(true);
   });
 });

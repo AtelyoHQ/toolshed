@@ -38,7 +38,8 @@ from the HTTP response that served its own script. Since the file processing
 happens in workers, a deployment that cannot send response headers — GitHub
 Pages, for example — leaves those workers without browser-enforced egress
 control, and falls back on the two measures below. If you are self-hosting and
-you can send headers, send them.
+you can send headers, send them; [DEPLOYING.md](DEPLOYING.md) says which hosts
+can.
 
 One thing a CSP cannot do, in any browser shipping today: stop a top-level
 navigation or a `window.open` to another address. The directive for that
@@ -69,7 +70,20 @@ Do not take any of the above on trust:
 2. Load the page, then disconnect from the network entirely and keep working.
 3. Read `index.html`, `public/_headers` and `e2e/app.spec.ts`. They are short.
 
-## Service worker storage
+## What is kept on your machine
 
 To work offline, the application stores a copy of its own code in the browser's
-cache. Your files are never put there. Clearing site data removes it.
+cache. Your files are never put there.
+
+Two other things are stored, in local storage, and both are preferences you
+set yourself: whether you waved away the offer to install the app, so it is
+not offered again, and whether you chose the light or dark theme. Neither is
+an identifier and neither describes a file you opened.
+
+Alongside the cache, the service worker keeps its own bookkeeping in IndexedDB
+— the address and fetch time of each cached file — because the cache is capped
+and something has to know what is oldest. That amounts to a local note of which
+of the app's own codecs you have used, which is as far as it goes: no
+identifier, nothing about the files you opened, and nothing that is sent
+anywhere, since there is nowhere to send it. Clearing site data removes all of
+it.

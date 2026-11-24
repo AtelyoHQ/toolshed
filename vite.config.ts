@@ -7,18 +7,55 @@ import { VitePWA } from 'vite-plugin-pwa';
 /**
  * Codecs ship their own .wasm and resolve it from `import.meta.url`.
  *
- * This exclusion is a *dev server* setting: esbuild's dependency pre-bundling
- * rewrites those generated URLs and the codecs then fail to resolve inside a
- * worker under `npm run dev`. It has no effect on `vite build` — the produced
- * bundle is byte-identical either way — so it protects local development only.
+ * This exclusion is a *dev server* setting: dependency pre-bundling rewrites
+ * those generated URLs and the codecs then fail to resolve inside a worker
+ * under `npm run dev`. It has no effect on `vite build`, so it protects local
+ * development only.
  */
 const CODECS = [
   '@jsquash/avif',
   '@jsquash/jpeg',
+  '@jsquash/oxipng',
   '@jsquash/png',
   '@jsquash/resize',
   '@jsquash/webp',
 ];
+
+/**
+ * libheif, pre-bundled before the dev server starts serving.
+ *
+ * Vite's dependency scan cannot reach it. It is imported by
+ * src/lib/image/codecs.ts, and the only path to that file runs through
+ * `new Worker(new URL('./image.worker.ts', import.meta.url))`, which the
+ * scanner does not follow. So on a cold dependency cache it is discovered
+ * when the dev server first transforms codecs.ts — with a page already open.
+ *
+ * Its bundler entry point is one line of CommonJS, and re-bundling it emits
+ * the shared interop runtime chunk and rewrites the file hashes of the
+ * dependencies the page has already loaded. Vite answers that with a full
+ * reload, which destroys the execution context underneath whatever is
+ * running; in the engine end-to-end suite it surfaces as `Execution context
+ * was destroyed` in whichever test was in flight. Only a cold cache reaches
+ * it, so CI — installing from scratch every run — does, and a developer with
+ * a warm cache does not. A plain ESM dependency found just as late
+ * re-optimises without the reload, which is why this list has one entry.
+ *
+ * Note which lever this is, because the other two do not work here.
+ * `needsInterop`, which is what Vite's own warning about mixed CommonJS
+ * suggests, is irrelevant: nothing mismatches, and the reload comes from the
+ * changed file hashes. `exclude`, which is how the codecs above are handled,
+ * breaks libheif outright — excluded, the dev server hands the browser that
+ * raw `module.exports` line. Pre-bundling is safe for exactly the reason the
+ * codecs cannot have it: libheif inlines its WebAssembly as base64 rather
+ * than resolving a URL from `import.meta.url`, so there is no generated URL
+ * for pre-bundling to rewrite.
+ *
+ * This is not scaffolding that the interface landing will retire. The engine's
+ * only entry point spawns the worker, so codecs.ts stays behind that boundary
+ * however much UI is built on top; the line can go only if something on the
+ * main thread ever imports it directly.
+ */
+const PREBUNDLE = ['libheif-js/wasm-bundle'];
 
 /**
  * Serves the privacy statement from the built site, as a page.
@@ -185,7 +222,22 @@ export default defineConfig({
       },
     ],
   },
-  optimizeDeps: { exclude: CODECS },
+  optimizeDeps: { exclude: CODECS, include: PREBUNDLE },
+  server: {
+    watch: {
+      /**
+       * Vite's watcher ignores `.git`, `node_modules`, `test-results` and the
+       * configured `outDir` — and so not the built offline harness, which
+       * `npm run test:e2e` writes while a dev server is up. The index.html
+       * landing there logs `[vite] page reload
+       * dist-offline-harness/index.html`. It changes nothing, because the
+       * client ignores a reload for an html file that is not the open page,
+       * but it reads exactly like the cause of a failing test and it cost an
+       * afternoon before being measured.
+       */
+      ignored: ['**/dist-offline-harness/**'],
+    },
+  },
   worker: {
     format: 'es',
     rollupOptions: {

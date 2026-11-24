@@ -1,4 +1,6 @@
 dist
+dist-codec-probe
+dist-offline-harness
 coverage
 node_modules
 package-lock.json

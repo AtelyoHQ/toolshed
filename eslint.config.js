@@ -18,6 +18,7 @@ export default tseslint.config(
     ignores: [
       'dist',
       'dist-codec-probe',
+      'dist-offline-harness',
       'dev-dist',
       'coverage',
       'playwright-report',

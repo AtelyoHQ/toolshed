@@ -11,6 +11,8 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { ToolGrid } from './components/ToolGrid';
 import { outputBytes } from './state/queue';
 import { useQueue } from './state/useQueue';
+import InstallPrompt from './components/InstallPrompt';
+import UpdateNotice from './components/UpdateNotice';
 
 export default function App() {
   const { state, actions, selectors } = useQueue();
@@ -173,6 +175,17 @@ export default function App() {
           </a>
         </div>
       </footer>
+
+      {/*
+        Both notices are transient and neither belongs in the page flow, so
+        they share one corner and stack rather than overlapping. The column
+        itself ignores pointer events: an empty one must not swallow clicks on
+        whatever the tools put underneath it.
+      */}
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 flex flex-col items-center gap-2 p-4 sm:items-end">
+        <UpdateNotice />
+        <InstallPrompt />
+      </div>
     </div>
   );
 }

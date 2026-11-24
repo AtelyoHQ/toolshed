@@ -16,7 +16,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b --noEmit && vite build",
+    "build:harness": "node scripts/build-harness.mjs",
     "preview": "vite preview --port 4173",
+    "preview:harness": "vite preview --outDir dist-offline-harness --port ${TOOLSHED_HARNESS_PORT:-4175} --strictPort",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",

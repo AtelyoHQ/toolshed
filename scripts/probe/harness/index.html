@@ -1,0 +1,22 @@
+<!doctype html>
+<!--
+  Not part of the application. scripts/build-harness.mjs builds this page with
+  the project's own Vite configuration, and e2e/offline.spec.ts drives it with
+  the network switched off. See the note at the top of main.ts.
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Toolshed offline harness</title>
+    <!--
+      An empty icon, so the browser does not ask for /favicon.ico. The offline
+      test asserts that no request failed while the network was off, and that
+      one would fail every run.
+    -->
+    <link rel="icon" href="data:," />
+  </head>
+  <body>
+    <p>Offline harness for the image engine. Nothing to see.</p>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

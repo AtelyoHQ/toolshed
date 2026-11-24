@@ -57,6 +57,16 @@ then on.
 In short: the app is always available offline; a given tool is available
 offline once you have used it once.
 
+Installing it is optional and offered once. When the browser decides the app is
+installable it says so in a small bar, and dismissing that is remembered —
+unless the browser gives the page no durable local storage, in which case the
+offer can come back after a reload. New versions install themselves in the
+background; a line of text tells you one is ready rather than reloading the
+tab, because a reload in the middle of a batch would throw the batch away.
+Reload before reaching for a tool you have not opened in that tab, though:
+codec chunks are named by content hash and are not precached, so one you have
+never fetched will ask the host for a file the new release replaced.
+
 Toolshed will keep its state in the URL hash rather than the path, so that the
 whole thing can be served from any subdirectory — a path-based route would
 make the app's relative asset URLs resolve against the route and 404 on a deep
@@ -117,8 +127,9 @@ the job.
 
 If your host can send response headers, point it at `public/_headers`
 (Netlify, Cloudflare Pages) or `vercel.json` (Vercel). That is what extends the
-Content-Security-Policy to the Web Workers where files are processed; see
-[PRIVACY.md](PRIVACY.md).
+Content-Security-Policy to the Web Workers where files are processed.
+[DEPLOYING.md](DEPLOYING.md) goes through the hosts one at a time, including
+why GitHub Pages cannot do it and what that costs.
 
 ## Development
 
@@ -126,7 +137,7 @@ Content-Security-Policy to the Web Workers where files are processed; see
 npm run typecheck    # tsc project references, no emit
 npm run lint         # eslint
 npm run test         # vitest unit tests for the engines
-npm run test:e2e     # playwright, builds and drives the real app
+npm run test:e2e     # playwright: the built app, the engine, and an offline run
 npm run check:subpath # serves dist/ from a nested directory
 npm run check:icons   # the committed icons still match their generator
 npm run format       # prettier

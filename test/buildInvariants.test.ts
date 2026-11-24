@@ -133,3 +133,32 @@ describe('precache configuration', () => {
     expect(globs).not.toContain('chunk-');
   });
 });
+
+/**
+ * `npm run dev` served an unstyled page for as long as the policy has
+ * existed, and nothing noticed: Vite injects dev stylesheets as inline
+ * <style> elements, `style-src 'self'` drops them, and the end-to-end suite
+ * only ever looks at the built bundle.
+ */
+describe('the dev server can serve its own styles', () => {
+  const root = fileURLToPath(new URL('..', import.meta.url));
+
+  it('relaxes style-src when serving, and not otherwise', async () => {
+    const source = readFileSync(fileURLToPath(new URL('../index.html', import.meta.url)), 'utf8');
+    const { resolveConfig } = await import('vite');
+    const serve = await resolveConfig({ root }, 'serve');
+    const build = await resolveConfig({ root }, 'build');
+
+    const named = (config: { plugins: readonly { name: string }[] }) =>
+      config.plugins.map((plugin) => plugin.name);
+
+    // The relaxation exists only on the serve side, which is what keeps the
+    // shipped policy strict without anyone having to remember.
+    expect(named(serve)).toContain('toolshed:dev-server-styles');
+    expect(named(build)).not.toContain('toolshed:dev-server-styles');
+
+    // And the source the build reads is the strict one.
+    expect(source).toContain("style-src 'self';");
+    expect(source).not.toContain('unsafe-inline');
+  }, 60_000);
+});

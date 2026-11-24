@@ -21,9 +21,17 @@ export function SettingsPanel({ tool, settings, onChange, idPrefix }: Props) {
     return <p className="text-shell-400 text-xs">{tool.note ?? 'Nothing to configure.'}</p>;
   }
 
+  // A control that applies only in another mode is not rendered outside it.
+  // Compared as strings because a select's value is whatever the option said
+  // and the settings may hold the number it was parsed into.
+  const visible = tool.fields.filter(
+    (field) =>
+      !field.showWhen || field.showWhen.oneOf.includes(String(settings[field.showWhen.key] ?? '')),
+  );
+
   return (
     <div className="grid gap-3 sm:grid-cols-2">
-      {tool.fields.map((field) => (
+      {visible.map((field) => (
         <Field
           key={field.key}
           field={field}
@@ -91,6 +99,42 @@ function Field({
 
       {field.type === 'size' && (
         <SizeField id={id} value={String(value ?? '')} hintId={hintId} onChange={onChange} />
+      )}
+
+      {field.type === 'text' && (
+        <input
+          id={id}
+          type={field.secret ? 'password' : 'text'}
+          value={String(value ?? '')}
+          placeholder={field.placeholder}
+          aria-describedby={hintId}
+          // A password typed here is for a file, not for an account, and a
+          // browser that offers to save it for this site is offering to keep
+          // the one thing the page is supposed to forget.
+          autoComplete={field.secret ? 'new-password' : 'off'}
+          spellCheck={false}
+          onChange={(event) => onChange(event.target.value)}
+          className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 mt-1 w-full rounded border px-2 py-1 font-mono text-xs"
+        />
+      )}
+
+      {field.type === 'number' && (
+        <input
+          id={id}
+          type="number"
+          inputMode="numeric"
+          min={field.min}
+          max={field.max}
+          step={1}
+          value={String(value ?? '')}
+          aria-describedby={hintId}
+          // An emptied field stays empty rather than becoming 0, which the
+          // runner can then refuse in words instead of acting on.
+          onChange={(event) =>
+            onChange(event.target.value === '' ? '' : Number(event.target.value))
+          }
+          className="border-shell-200 dark:border-shell-700 dark:bg-shell-850 mt-1 w-full rounded border px-2 py-1 font-mono text-xs"
+        />
       )}
 
       {field.type === 'select' && (

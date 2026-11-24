@@ -52,3 +52,34 @@ describe('choosing a tool for a dropped file', () => {
     expect(toolForDrop('image', 'image-compress').unavailable).toBeUndefined();
   });
 });
+
+describe('the metadata toggle is only offered where it is true', () => {
+  it('is gone from every tool that re-encodes', () => {
+    // The encoders carry no EXIF, so on a re-encoding tool the toggle
+    // promised something impossible: turning it off changed nothing, and
+    // whether metadata survived came down to the accident of whether the
+    // re-encode happened to grow the file.
+    for (const tool of ALL_TOOLS.filter((candidate) => candidate.recompress)) {
+      const keys = tool.fields.map((field) => field.key);
+      expect(keys, tool.id).not.toContain('stripMetadata');
+    }
+  });
+
+  it('says so, rather than leaving it unexplained', () => {
+    for (const tool of ALL_TOOLS.filter((candidate) => candidate.recompress)) {
+      expect(tool.note, tool.id).toMatch(/removes EXIF/i);
+    }
+  });
+
+  it('still strips, which is what the absent control would have said', () => {
+    for (const tool of ALL_TOOLS.filter((candidate) => candidate.recompress)) {
+      expect(toImageSettings(tool.defaults, tool).stripMetadata, tool.id).toBe(true);
+    }
+  });
+
+  it('leaves the dedicated tool alone, where the toggle would be honest', () => {
+    const strip = toolById('image-strip-metadata');
+    expect(strip?.recompress).toBeUndefined();
+    expect(strip?.note).toBeUndefined();
+  });
+});

@@ -46,6 +46,11 @@ export interface Tool {
   recompress?: boolean;
   /** One line, shown under the name. Say what it does, not how clever it is. */
   summary: string;
+  /**
+   * A standing fact about this tool that no control can express. Shown in
+   * the settings panel.
+   */
+  note?: string;
   accepts: FileKind;
   defaults: ToolSettings;
   fields: SettingField[];
@@ -60,13 +65,6 @@ const QUALITY: SettingField = {
   min: 20,
   max: 95,
   hint: 'Higher keeps more detail and makes a bigger file.',
-};
-
-const STRIP: SettingField = {
-  key: 'stripMetadata',
-  label: 'Remove metadata',
-  type: 'toggle',
-  hint: 'Takes out EXIF, GPS coordinates and timestamps.',
 };
 
 function formatField(label = 'Convert to'): SettingField {
@@ -91,9 +89,10 @@ export const TOOLS: Tool[] = [
     label: 'Compress',
     group: 'image',
     summary: 'Make an image smaller at a quality you choose.',
+    note: 'Re-encoding always removes EXIF and GPS: the encoders cannot carry them.',
     accepts: 'image',
     defaults: { format: 'keep', quality: 75, stripMetadata: true },
-    fields: [QUALITY, STRIP],
+    fields: [QUALITY],
   },
   {
     id: 'image-target-size',
@@ -101,6 +100,7 @@ export const TOOLS: Tool[] = [
     label: 'Compress to a size',
     group: 'image',
     summary: 'Land under a byte budget, for forms that demand one.',
+    note: 'Re-encoding always removes EXIF and GPS: the encoders cannot carry them.',
     accepts: 'image',
     defaults: { format: 'keep', quality: 80, targetSize: '200kb', stripMetadata: true },
     fields: [
@@ -110,7 +110,6 @@ export const TOOLS: Tool[] = [
         type: 'size',
         hint: 'For example 200kb or 1.5mb. Quality is searched for you.',
       },
-      STRIP,
     ],
   },
   {
@@ -119,6 +118,7 @@ export const TOOLS: Tool[] = [
     label: 'Resize',
     group: 'image',
     summary: 'Scale down by the longest edge.',
+    note: 'Re-encoding always removes EXIF and GPS: the encoders cannot carry them.',
     accepts: 'image',
     defaults: { format: 'keep', quality: 85, longestEdge: 1920, stripMetadata: true },
     fields: [
@@ -132,7 +132,6 @@ export const TOOLS: Tool[] = [
         hint: 'Never enlarges: that cannot add detail, only bytes.',
       },
       QUALITY,
-      STRIP,
     ],
   },
   {
@@ -141,6 +140,7 @@ export const TOOLS: Tool[] = [
     label: 'Rotate',
     group: 'image',
     summary: 'Turn or mirror an image.',
+    note: 'Re-encoding always removes EXIF and GPS: the encoders cannot carry them.',
     accepts: 'image',
     defaults: { format: 'keep', quality: 90, rotate: 90, flip: '', stripMetadata: true },
     fields: [
@@ -166,7 +166,6 @@ export const TOOLS: Tool[] = [
         ],
       },
       QUALITY,
-      STRIP,
     ],
   },
   {
@@ -184,9 +183,10 @@ export const TOOLS: Tool[] = [
     label: 'Convert format',
     group: 'convert',
     summary: 'JPEG, PNG, WebP, AVIF — and HEIC from an iPhone.',
+    note: 'Re-encoding always removes EXIF and GPS: the encoders cannot carry them.',
     accepts: 'image',
     defaults: { format: 'jpeg', quality: 80, stripMetadata: true },
-    fields: [formatField(), QUALITY, STRIP],
+    fields: [formatField(), QUALITY],
   },
 ];
 

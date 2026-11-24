@@ -325,6 +325,10 @@ test('does not carry one tool’s settings onto a different tool', async ({ page
   await expect(row.getByLabel('Tool')).toHaveValue('image-compress');
   // Compress has no size control, so no resolution may be thrown away.
   await expect(row.getByLabel('Longest edge')).toHaveCount(0);
+  // And no metadata toggle, because re-encoding always drops it. Asked for
+  // by role: "Remove metadata" is also the name of a tool in the dropdown.
+  await expect(row.getByRole('checkbox', { name: 'Remove metadata' })).toHaveCount(0);
+  await expect(row.getByText(/re-encoding always removes exif/i)).toBeVisible();
 });
 
 test('the totals line matches the files that actually finished', async ({ page }) => {
